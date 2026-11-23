@@ -105,6 +105,27 @@ type CatalogGame struct {
 	Year *int `json:"year,omitempty"`
 }
 
+// CatalogGameDetails defines model for CatalogGameDetails.
+type CatalogGameDetails struct {
+	// CoverId For /catalog/covers/{coverId}
+	CoverId    *string  `json:"coverId,omitempty"`
+	Developers []string `json:"developers"`
+	Genres     []string `json:"genres"`
+	Id         int64    `json:"id"`
+	InLibrary  bool     `json:"inLibrary"`
+	Name       string   `json:"name"`
+
+	// Rating IGDB's combined critic and user rating, when it has one
+	Rating *int `json:"rating,omitempty"`
+
+	// Screenshots Image ids for /catalog/screenshots/{imageId}
+	Screenshots []string       `json:"screenshots"`
+	Storyline   *string        `json:"storyline,omitempty"`
+	Summary     *string        `json:"summary,omitempty"`
+	Videos      []CatalogVideo `json:"videos"`
+	Year        *int           `json:"year,omitempty"`
+}
+
 // CatalogPlatform defines model for CatalogPlatform.
 type CatalogPlatform struct {
 	// CatalogName IGDB's name for the platform; absent when IGDB doesn't know the folder
@@ -121,6 +142,14 @@ type CatalogRequestInput struct {
 
 	// Platform A library folder IGDB knows (listCatalogPlatforms)
 	Platform string `json:"platform"`
+}
+
+// CatalogVideo defines model for CatalogVideo.
+type CatalogVideo struct {
+	Name string `json:"name"`
+
+	// YoutubeId Watch at https://www.youtube.com/watch?v={youtubeId}
+	YoutubeId string `json:"youtubeId"`
 }
 
 // Credentials defines model for Credentials.
@@ -294,6 +323,12 @@ type ListCatalogGamesParams struct {
 // ListCatalogGamesParamsSort defines parameters for ListCatalogGames.
 type ListCatalogGamesParamsSort string
 
+// GetCatalogGameParams defines parameters for GetCatalogGame.
+type GetCatalogGameParams struct {
+	// Platform The library folder
+	Platform string `form:"platform" json:"platform"`
+}
+
 // ListCatalogRequestsParams defines parameters for ListCatalogRequests.
 type ListCatalogRequestsParams struct {
 	// Platform The library folder
@@ -346,6 +381,9 @@ type ServerInterface interface {
 	// ListCatalogGames Every game on a platform, from IGDB, marked when the library has it
 	// (GET /catalog/games)
 	ListCatalogGames(w http.ResponseWriter, r *http.Request, params ListCatalogGamesParams)
+	// GetCatalogGame One game's details from IGDB, for a platform in the library
+	// (GET /catalog/games/{gameId})
+	GetCatalogGame(w http.ResponseWriter, r *http.Request, gameId int64, params GetCatalogGameParams)
 	// ListCatalogPlatforms The library's platforms, matched to the game catalog (IGDB)
 	// (GET /catalog/platforms)
 	ListCatalogPlatforms(w http.ResponseWriter, r *http.Request)
@@ -355,6 +393,9 @@ type ServerInterface interface {
 	// RequestCatalogGame Request a game from the catalog
 	// (POST /catalog/requests)
 	RequestCatalogGame(w http.ResponseWriter, r *http.Request)
+	// GetCatalogScreenshot A game's screenshot, fetched from IGDB by the server
+	// (GET /catalog/screenshots/{imageId})
+	GetCatalogScreenshot(w http.ResponseWriter, r *http.Request, imageId string)
 	// ListPlatforms Platform folders in the ROM library
 	// (GET /platforms)
 	ListPlatforms(w http.ResponseWriter, r *http.Request)
@@ -669,6 +710,48 @@ func (siw *ServerInterfaceWrapper) ListCatalogGames(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// GetCatalogGame operation middleware
+func (siw *ServerInterfaceWrapper) GetCatalogGame(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "gameId" -------------
+	var gameId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "gameId", r.PathValue("gameId"), &gameId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "gameId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetCatalogGameParams
+
+	// ------------- Required query parameter "platform" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "platform", r.URL.Query(), &params.Platform, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "platform"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "platform", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCatalogGame(w, r, gameId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListCatalogPlatforms operation middleware
 func (siw *ServerInterfaceWrapper) ListCatalogPlatforms(w http.ResponseWriter, r *http.Request) {
 
@@ -721,6 +804,32 @@ func (siw *ServerInterfaceWrapper) RequestCatalogGame(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RequestCatalogGame(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCatalogScreenshot operation middleware
+func (siw *ServerInterfaceWrapper) GetCatalogScreenshot(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "imageId" -------------
+	var imageId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "imageId", r.PathValue("imageId"), &imageId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "imageId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCatalogScreenshot(w, r, imageId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1002,9 +1111,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/platforms", wrapper.ListPlatforms)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/platforms", wrapper.ListCatalogPlatforms)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/games", wrapper.ListCatalogGames)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/games/{gameId}", wrapper.GetCatalogGame)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/requests", wrapper.ListCatalogRequests)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/catalog/requests", wrapper.RequestCatalogGame)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/covers/{coverId}", wrapper.GetCatalogCover)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/screenshots/{imageId}", wrapper.GetCatalogScreenshot)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/requests", wrapper.ListRequests)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/requests", wrapper.CreateRequest)
@@ -1700,6 +1811,116 @@ func (response ListCatalogGamesdefaultJSONResponse) VisitListCatalogGamesRespons
 	return err
 }
 
+type GetCatalogGameRequestObject struct {
+	GameId int64 `json:"gameId"`
+	Params GetCatalogGameParams
+}
+
+type GetCatalogGameResponseObject interface {
+	VisitGetCatalogGameResponse(w http.ResponseWriter) error
+}
+
+type GetCatalogGame200JSONResponse CatalogGameDetails
+
+func (response GetCatalogGame200JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGame400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetCatalogGame400JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGame401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCatalogGame401JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGame404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetCatalogGame404JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGame502JSONResponse struct{ BadGatewayJSONResponse }
+
+func (response GetCatalogGame502JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGame503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetCatalogGame503JSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogGamedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetCatalogGamedefaultJSONResponse) VisitGetCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListCatalogPlatformsRequestObject struct {
 }
 
@@ -1949,6 +2170,99 @@ type RequestCatalogGamedefaultJSONResponse struct {
 }
 
 func (response RequestCatalogGamedefaultJSONResponse) VisitRequestCatalogGameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogScreenshotRequestObject struct {
+	ImageId string `json:"imageId"`
+}
+
+type GetCatalogScreenshotResponseObject interface {
+	VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error
+}
+
+type GetCatalogScreenshot200ResponseHeaders struct {
+	CacheControl string
+}
+
+type GetCatalogScreenshot200ImagejpegResponse struct {
+	Body          io.Reader
+	Headers       GetCatalogScreenshot200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetCatalogScreenshot200ImagejpegResponse) VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetCatalogScreenshot401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCatalogScreenshot401JSONResponse) VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogScreenshot502JSONResponse struct{ BadGatewayJSONResponse }
+
+func (response GetCatalogScreenshot502JSONResponse) VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogScreenshot503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetCatalogScreenshot503JSONResponse) VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogScreenshotdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetCatalogScreenshotdefaultJSONResponse) VisitGetCatalogScreenshotResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2539,6 +2853,9 @@ type StrictServerInterface interface {
 	// ListCatalogGames Every game on a platform, from IGDB, marked when the library has it
 	// (GET /catalog/games)
 	ListCatalogGames(ctx context.Context, request ListCatalogGamesRequestObject) (ListCatalogGamesResponseObject, error)
+	// GetCatalogGame One game's details from IGDB, for a platform in the library
+	// (GET /catalog/games/{gameId})
+	GetCatalogGame(ctx context.Context, request GetCatalogGameRequestObject) (GetCatalogGameResponseObject, error)
 	// ListCatalogPlatforms The library's platforms, matched to the game catalog (IGDB)
 	// (GET /catalog/platforms)
 	ListCatalogPlatforms(ctx context.Context, request ListCatalogPlatformsRequestObject) (ListCatalogPlatformsResponseObject, error)
@@ -2548,6 +2865,9 @@ type StrictServerInterface interface {
 	// RequestCatalogGame Request a game from the catalog
 	// (POST /catalog/requests)
 	RequestCatalogGame(ctx context.Context, request RequestCatalogGameRequestObject) (RequestCatalogGameResponseObject, error)
+	// GetCatalogScreenshot A game's screenshot, fetched from IGDB by the server
+	// (GET /catalog/screenshots/{imageId})
+	GetCatalogScreenshot(ctx context.Context, request GetCatalogScreenshotRequestObject) (GetCatalogScreenshotResponseObject, error)
 	// ListPlatforms Platform folders in the ROM library
 	// (GET /platforms)
 	ListPlatforms(ctx context.Context, request ListPlatformsRequestObject) (ListPlatformsResponseObject, error)
@@ -2846,6 +3166,33 @@ func (sh *strictHandler) ListCatalogGames(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// GetCatalogGame operation middleware
+func (sh *strictHandler) GetCatalogGame(w http.ResponseWriter, r *http.Request, gameId int64, params GetCatalogGameParams) {
+	var request GetCatalogGameRequestObject
+
+	request.GameId = gameId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCatalogGame(ctx, request.(GetCatalogGameRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCatalogGame")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCatalogGameResponseObject); ok {
+		if err := validResponse.VisitGetCatalogGameResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListCatalogPlatforms operation middleware
 func (sh *strictHandler) ListCatalogPlatforms(w http.ResponseWriter, r *http.Request) {
 	var request ListCatalogPlatformsRequestObject
@@ -2920,6 +3267,32 @@ func (sh *strictHandler) RequestCatalogGame(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RequestCatalogGameResponseObject); ok {
 		if err := validResponse.VisitRequestCatalogGameResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCatalogScreenshot operation middleware
+func (sh *strictHandler) GetCatalogScreenshot(w http.ResponseWriter, r *http.Request, imageId string) {
+	var request GetCatalogScreenshotRequestObject
+
+	request.ImageId = imageId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCatalogScreenshot(ctx, request.(GetCatalogScreenshotRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCatalogScreenshot")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCatalogScreenshotResponseObject); ok {
+		if err := validResponse.VisitGetCatalogScreenshotResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -3113,84 +3486,89 @@ func (sh *strictHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"7Fz9Uhu5ln8VVe9UAbWN7RCSvUNqaoqQhKEuCSxOKrUVsyB3H9sa2lJHUkM8KZ5jH2hf7NY5Ure7sdoG",
-	"kjDM1P3Pdqulo6Pz8Tsf8tcoUdNcSZDWRDtfownwFDR97IPtgzFCSfyWgkm0yC19xWeGKc2SDLg2zE6A",
-	"nZ39pozdNO4Vlih1ISCKI5NMYMpxCjvLIdqJjNVCjqPr6+s40mByJQ3Qgi95us8tXPEZfkuUtCAtfuR5",
-	"nomE49rd342jZz7tTxpG0U70H935Trruqem+1lppt1RzA7uSCWlhrGlWtn6s1VXGtY7Z55fCWqU1SLvB",
-	"RlxkkOJONYwKAyltNeFZFl3HSPAJfC7A2B9P8PsJMO0WY6kCw6SybMptMnEkKWk1TyyStafkKBPJAxC1",
-	"m2ng6YzBF2GsiZFPSJaQjDNjuQVmJ9wynmXqCqVEGKTPTffDifsg4UsOiYWUgRsTR2+UHoo0Bfnjl3+n",
-	"/MYhjZmQSVakQo4ZlzOWaGXMptJiLCQrpOGj6myRyHfKvlGFTB+CRmaKZMI0GFXoBNhIaTomVhgghp1A",
-	"KjQ4WWq+Wz2J60bjUDkK8TNuSWhIox2rC1hmCWI0KJt7zmQsrLTLSqOiNDNiLDdFaV9idjUByZQEJgwz",
-	"YJcbnOs4eq/UWy5nXm/Nj+fxCapBJqbCQvqCabB6xvjIgia9PcHvm7v03bERuf5B8sJOlBZ/QPowkops",
-	"hZQJSUp8pZUcs0RDCtIKnhlP1CUXGR9m8DDmrm6gSSglQGqYMHLNosEbiXGh0TpLYqUBfYnsuy5FgA53",
-	"t7CTt2AnKqWvuVY5aCucx1EiTQLOzYuYnWhVjJ19PTp4tcdyrS4FHlFcitZQqQy4RPbgXO/4NCC/uJfy",
-	"1TXDJJ+WigaVOA8La5WM4psyG0c5N+ZK6XRx3tdTLjLGZcrKMeV0QQLxWZEH1EvOUH+mHA0ToLTy+YQ8",
-	"SVQhbWDC67im4J/mZFYLOZZEp9Wravg7eA/FLc/UeN+zq3koiboEfRDY7xulWTdxr3ZplOl+9aOvQ6wT",
-	"gUkO9l+9XDNMIKEjpafcRjuRkPb59nwGEjyniUIeiqHmehYyS3SSwklfnnGL87GRylLQzjWDCZ6E9Pte",
-	"INgU06lfa+HZDLheJOJ/gGumRmwktLFMQwbcQGAnN06Ltk9k1Le45KiO/fYCx+UGhEXfc7sh8iWnXjA+",
-	"NCCtM+E4koANKveFVFc01jEzdLayVdUyt5vWd2+wgiZasnPvKQ5kXjhjl6YCV+PZcY0PI54ZiG+wZsyn",
-	"cLBMBmM20mrKMmFsTSVMSDSnQoppMY12noTENK8dz00pbfLDMRoZbNh6beHygM0GLsa/HIIc20m0s9Xr",
-	"0eLl9yer+FmREpf7DzK35lvuxlRAq4cfKha5X5pUP9teYUprg59s/aO5xa1VeyxXrCYMbbGCuTfoL39e",
-	"6RdfgcVlFhanCVpX9G8FzGoaUJi+RX8esylPJkLCJuJ594uR/ALOEmdO4Auf5hlO9CmSyp6NCJ+eBng8",
-	"BWP4OLQSolyrmJmgbitSb0SZL5iES9AUwXAhDbl9LVEwVh0DbWm+ZIgl7XbrtgYkZtAZd9j+y937m5IT",
-	"b5dDxhPGSvtvwsLUBI2//4FrzWdtnu2YG4OMdU7cmy12JewE4zHJJqrQdctSFOQFFr2mTOEL6CAdQo7U",
-	"B52F+eZfXDMs5+O5vfdO6QWDaW5nztrbCWiC7FJJCBGRASQTH1MEzF0xzISZQLprG5Yg5RY2rZgGpzQA",
-	"aeuMRvwBL2cWTGO+dlxghc0gHMos+Fk3ds7Y+mpzlsZ1YQgLUZVquCVgek+5CjLvDG3xmmE0Nmaju0Ip",
-	"J1R34vfdDV18K4+pNONVKmTKU3BO1M43eztoh2u1A/YbfEPVvu3aLTh0teJNc6XvyOTynTcigxbRLocc",
-	"cztZ3KvHfpsaMm7FJbCc20nMlEyAlW8uW7g/4VvPngfM/W+7m1vPniM2Re6Uw9lIZBUjjZDjDDbxJ+Lz",
-	"N1ijhWeZSEAaCEVNlRUqJOKgcNRV8xuLD7UaazBNWzHKFLcOhVRArQJtvWoJWUyH9zM5LkXTtl9juS3M",
-	"KnXzNqTvBi+xY3FU5OndNP5bTF8NNJYHV99wtb0a7+s2qU7tEtN5HwzfKkfv565tzTA/jCnNctBT4fJV",
-	"SDVMQdqYccMqr1W6QjGqieBNzL1UJFdg/CqqqFB9c4EnK0F9HPm9HdzOdjWEM2BN8agUQgOlKz7gV78K",
-	"IYYFJvQQYVsLGqf53/WJtbn5dafbHQz6/7nx608rRXC+hRr3lshHv9Kh5g7ODXCN+Hh8vsN45RpKP5Bh",
-	"KlKOK+/g4Y5FE8MNZXz90E4URyDRIHyKqjmjOPpcQEFmNlVXMlM8dT87o1n/TINcUSKIvuc7CAbp4cNB",
-	"01ttah1d7QZCs3mGLZjEyNryIjjlydHbSiYxQVXuywuoYVzDqgVyX5IJVZ+Qdbeg8fOwquUszvLK03QL",
-	"Ym6GuCVlzRXmPIkrhoek7YOBUFxYxrX3gw8h6+umXCSBwHBSaGFnfXQMjgAzL/YJ5E9VwXORUtQs8M0p",
-	"4Ln4J8xcEhctelgiroSeV6k6DH/aVz5ny3AmQ4Iy4TLNUEAoChzxBNh6GRB2eS42aJSdwEC+n+XQp1VY",
-	"kgmQlq1fwbBrdIIDvcvrjEF2rNmgMx6DBM0JhTjUJgzhkR2WTLgcAxN2ICmTFjvt1YVk51N+Qa+edwZy",
-	"IDGfDNL6dDfKIPe72DQihapU4dOC502unfu6BVv/zdr8SGazmPXxKCAeyD6fQl9Y+OWQf9nosD2qEhlh",
-	"wfmRTSISDY23Jk5wy8LkcMb21ZoZyHO0kx16+4hKTMdaWUiQ3POYGRd5e44ZkKlhUrG9/skbZtUFyM5A",
-	"Vo57J0JFLkPJ3eODKI4wVnDH2us86fQo9Z2D5LmIdqKn9BOZ7QkJVRcLGd1MjQUJVq5MQBO3e0/ZeZlL",
-	"OaPBZ6kwmIdIz6uAsRQWXUhDYS073u33Px6dvDo7PNo/ePcL+W80sahWdDzovKJDWtypBxj7UqXfr75c",
-	"T2NdN3XQ6gJuVri3er3vtjRZkUDlpF9WcpqFuWaBLTSxH9yt1f1p+u1er+2VanPdWimcXnmy+pVGkYte",
-	"err6pXkBF9/Y+nn1GzcLfsSwES8yu/rdsjw1t5fRzqfTWp6euO14bfmY0mO4qegU36lkXxW2LvwL4onP",
-	"FyRlO1yYwnpXYdk6z4yq51KuOOmxtzMb3+/w73oo35u5uFu0+eDsPqv5nxaOu5B+DAFm74N9C9GfoJXv",
-	"fa0PUqz2ldX1e+nJfRhcsTRAxzJGVnXTNm7Wy6s/kK31ZZZwF/fkifadJxqY+t5i+RsVp4QpHVIG1rAc",
-	"VJ45KpbbAyyKdrGDaMiTixprmzv6SEpta5Vj76vxp6FWVwY0wxk67EhiE0cCxsQIFLR1kMTBENQc7Ts1",
-	"zEBaxc675y+YQqNxJQzMHzJ6Rs73V0rd/TIoer2nCSbZ6ROcO2jQlIEjkSZ75W7Q8Ws+BUt255MHkp8L",
-	"0LM5jvRZ+/nBN4K+7X8EoG14IkJFbTM92QpPtNDHhsCpwWcyqsKyVKRYi6QTLYsV7mhDxBDLWrf17Pmt",
-	"d0UTndXJ/B68EsbceZ5WHVszDpHGzDj+1SQ782hrWQiBA+90bqc3TMvT3tZqRa4alB4HUngjpDATYiFi",
-	"+FX9JcusRwWng6Zjt7IPkl+KMalqTH15XCKGp/bFnabiNxRgvfQ39CojAyBHmbryqPufe683YveZYzlP",
-	"281MXEJaxjZDIanVrd7fQmsIU5LWYR8nIAeStr3Y0KObBCUcBwzRWPFkgv10deIHcoXZYkIaCzxtM1/z",
-	"AOEvLmJ9tP7fKmHzNqFwsIZB65KYbPfw8OjjWf9g/92H418wBgo2KDEl605ou/d0MW7rl21EjyJwe/JQ",
-	"gVuRE8fMowjj7hyR9W6hBFV/8uPQmj3f9CbLZreK/61ArrVy2maT+6gmPu1EyM6nYfb6x+hKZ4YZPoWy",
-	"JRjX94bSsFR562h5Yql7Z1FV9qFs49lDSlpwGCZl6jCMaI7iJX26tez7J775R2/z59OvT+Lt3vVP0Won",
-	"vYj/xZSPoft7DuOmtlSpzaGQLn0auCoQKCq4WvbW8+3//7+n/7XdVJQ99BSbe0parbK7dSNf3zcye3Yb",
-	"n1G75UCvPL3VOlXn7bcGgLuNTgDGtY3ZCGwyKcWT+sOGs5p1r+lAldZuqMGY+xRyUPYH0YHzFT47Pohc",
-	"1tRdXvD14VqZnfExR49Nv+MP5maPJWY5y+YcMZYKz40l3EDM8kImtvCYh7MMqJbCBigwg8glj/mYZhxq",
-	"nlyANa4FnpuBHETrH/q7G4Ooww4sog42FQZJReooU5yyQiIi4ZKcF5EXghWHix19NzTyFn2LIRxfK5S2",
-	"C/Qd2/dayivDGW3vBdNcXhj8qiGDS06dAQ5R4emdG6XteQu5n1thfq8XpCQ0CS7QmKdSgChXeZFxXSur",
-	"zX+50Y21ahU1GhloWadXL+v3ep6nN0v782bb029MhTQrQ1VbWPVhKbKZi12oc0zCF3vkthruIOOGnTte",
-	"nFctXPgSlWirnl3fc59xY2/RbUx0B+pQC2b9SLpSMAqWsyoPmoDeXv1SdTnnL2LvX1+CnjkDpiR29nsD",
-	"Es+tPXZ/6gtI56i+NEUTbpiwK+1/OWd7pvAw0Ggc/flKUtKyqCj3lmDH7xu3AbAZQBmo914nXOsZE9b5",
-	"vOjvDDlqzm3NVKwxsb8jkZYJiEAfwkrR07V7XEH0QYtzC3Q7gsaSVcNEAi3oetGwKZliZutTW6WBK8ES",
-	"12lnmZevYpNH7Oj/TK9Us83fSdHIVYB2UuOPFtJ7K9J3rqqsmZImQwJWbyc1TUsclPG4JfvS55dgfFu1",
-	"k2ZuqVmTOsxqjUquxeJK6Qt301Ay9wwMK+86l+59IEv3UAfZMctFcmHmHU1svQTkLqXjx7FpYfxNZN/z",
-	"pGEslBxIHOWbrlkKiUhhI250A7mWD9fZhI7mZrcU2612SdWckZCpGUjE3tRvxUXms07nUp15Ms87bLv3",
-	"89yX0d64v6iMDo0zzFZWiwTQuxfWOpL6QVmowBWjB85GVYoZuLnaVKpHCsLunHL6K7jMk1K5fegZaDIP",
-	"usUQEmt1QGuGWZVvZnAJWdmYhxeqRTJhJ2r6lk15jkPIK1Yzh93go0B1PwDOHc/Rio+HvwGqPbAQHTdB",
-	"aJVGqTVn1gSpQlJOkgLAavHUa6jnb4Qs6nnmR4YlYibhijCs0MaGT68VOlT9A75hFVW79m8nDjGUDlcY",
-	"58xHyv2HBSukFRmZAkyEUe/hQCYqF1SlKGuIVYbuBspFp7xdLxtRikmDKTJLXhm+5HhSLway4b1LUoWp",
-	"fHiF9UKue69++e0Hee1/u+t/u+s2d11iZfLY3Mt5ed8pgPhbrG73q//ki0opZGCDf43SAMgTblylHOT8",
-	"xpXA8FUmkGWQ7pACl0pVx+KQ1vVaw1RVBauajYjLcIMpzdavJnhzq/YY1yokVemRrxtlHcGFIQOJgbju",
-	"sN0adZ5+snEJVoiFYX71F41clO/7XiB4ILkGlsHIMp4pCSX8R9KqCxQhU/GKeFo3Fav6L08cXY9YWb5R",
-	"inF78wuOre5lZW2xEt6l2YtVNxpO2zSiS/+i4wqUD0RKezw+Av93PjnX2E9Awv7CB89F7lToCrWzrii1",
-	"gNQJbCEzMMb/4VgnEJJaPWuV1d5D+Jf/pktKrjr3d1WB92ho/CHMMyy041ab7Wx8a8B1QhjH3dXIhEFr",
-	"ZOYBnTtluhnn70ga16tVXihMJpBcmA57zSu8hGPTgRSGXfJMpM65uPv9ztPQbTv6s7FlWQ5X5rtdz+bn",
-	"+6Yhtx5bGpLc83cMFt57hXZHg0ltZaxLe6UepT8gHPsrgCVfXm5mISsu0vmYJdpW3XAMatue7yJ0rYuK",
-	"LlihOnlMIjJhZ3SHc95tiE0OIgGq9xsrsowNHcrwuZCBnCuq+ysybqmHklKWGih7GVKwfShvlP5Ag+1X",
-	"CEjmQe3v0zzX/pSA9iMllGp/5mbqnYMY+zXvXgbOvdm9Vbuq+OkUzYmbylmvQmfRToQ3AKPr02q20E0a",
-	"VuRx2eZF6NJdw/EWDxkQtfZGlHIa1/A3TGkWFzC771Vc3Ey5NKGJCSzzkrq/GLQUb8tburSekGlFDymT",
-	"qG2jTA9en17/awA=",
+	"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",
+	"pzU9RpmYt40qPXhzcfP/AwA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

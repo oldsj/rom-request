@@ -219,6 +219,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/catalog/games/{gameId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One game's details from IGDB, for a platform in the library */
+        get: operations["getCatalogGame"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/catalog/requests": {
         parameters: {
             query?: never;
@@ -258,6 +275,26 @@ export interface paths {
          * @description Served from here so the CSP stays same-origin and browsers don't contact IGDB.
          */
         get: operations["getCatalogCover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/catalog/screenshots/{imageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A game's screenshot, fetched from IGDB by the server
+         * @description Served from here so the CSP stays same-origin and browsers don't contact IGDB.
+         */
+        get: operations["getCatalogScreenshot"];
         put?: never;
         post?: never;
         delete?: never;
@@ -415,6 +452,29 @@ export interface components {
             coverId?: string;
             /** @description A name in the platform folder matches */
             inLibrary: boolean;
+        };
+        CatalogGameDetails: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            year?: number;
+            summary?: string;
+            storyline?: string;
+            /** @description IGDB's combined critic and user rating, when it has one */
+            rating?: number;
+            /** @description For /catalog/covers/{coverId} */
+            coverId?: string;
+            inLibrary: boolean;
+            genres: string[];
+            developers: string[];
+            /** @description Image ids for /catalog/screenshots/{imageId} */
+            screenshots: string[];
+            videos: components["schemas"]["CatalogVideo"][];
+        };
+        CatalogVideo: {
+            name: string;
+            /** @description Watch at https://www.youtube.com/watch?v={youtubeId} */
+            youtubeId: string;
         };
         Release: {
             /**
@@ -883,6 +943,37 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getCatalogGame: {
+        parameters: {
+            query: {
+                /** @description The library folder */
+                platform: string;
+            };
+            header?: never;
+            path: {
+                gameId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The game */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogGameDetails"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
     listCatalogRequests: {
         parameters: {
             query: {
@@ -953,6 +1044,33 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The cover, 264×374 */
+            200: {
+                headers: {
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getCatalogScreenshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                imageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The screenshot, 889×500 */
             200: {
                 headers: {
                     "Cache-Control": string;

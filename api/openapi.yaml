@@ -349,6 +349,47 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /catalog/games/{gameId}:
+    get:
+      operationId: getCatalogGame
+      summary: One game's details from IGDB, for a platform in the library
+      tags: [catalog]
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: platform
+          in: query
+          required: true
+          description: The library folder
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      responses:
+        '200':
+          description: The game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogGameDetails'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
   /catalog/requests:
     get:
       operationId: listCatalogRequests
@@ -434,6 +475,41 @@ paths:
       responses:
         '200':
           description: The cover, 264×374
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /catalog/screenshots/{imageId}:
+    get:
+      operationId: getCatalogScreenshot
+      summary: A game's screenshot, fetched from IGDB by the server
+      description: Served from here so the CSP stays same-origin and browsers don't contact IGDB.
+      tags: [catalog]
+      parameters:
+        - name: imageId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9]{1,40}$'
+      responses:
+        '200':
+          description: The screenshot, 889×500
           headers:
             Cache-Control:
               required: true
@@ -721,6 +797,59 @@ components:
         inLibrary:
           type: boolean
           description: A name in the platform folder matches
+
+    CatalogGameDetails:
+      type: object
+      required: [id, name, inLibrary, genres, developers, screenshots, videos]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        year:
+          type: integer
+        summary:
+          type: string
+        storyline:
+          type: string
+        rating:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: IGDB's combined critic and user rating, when it has one
+        coverId:
+          type: string
+          description: For /catalog/covers/{coverId}
+        inLibrary:
+          type: boolean
+        genres:
+          type: array
+          items:
+            type: string
+        developers:
+          type: array
+          items:
+            type: string
+        screenshots:
+          type: array
+          description: Image ids for /catalog/screenshots/{imageId}
+          items:
+            type: string
+        videos:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogVideo'
+
+    CatalogVideo:
+      type: object
+      required: [name, youtubeId]
+      properties:
+        name:
+          type: string
+        youtubeId:
+          type: string
+          description: Watch at https://www.youtube.com/watch?v={youtubeId}
 
     Release:
       type: object

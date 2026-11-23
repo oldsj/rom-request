@@ -9,6 +9,7 @@ import {
 
 import { meQuery } from './api/client';
 import { CatalogPage, validateCatalogSearch } from './routes/catalog';
+import { GamePage, validateGameSearch } from './routes/game';
 import { AppLayout } from './routes/layout';
 import { LoginPage } from './routes/login';
 import { RequestsPage } from './routes/requests';
@@ -65,6 +66,16 @@ const catalogRoute = createRoute({
   },
 });
 
+const gameRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: '/games/$gameId',
+  validateSearch: validateGameSearch,
+  component: function Game() {
+    const { gameId } = gameRoute.useParams();
+    return <GamePage key={gameId} gameId={gameId} platform={gameRoute.useSearch().platform} />;
+  },
+});
+
 const requestsRoute = createRoute({
   getParentRoute: () => signedInRoute,
   path: '/requests',
@@ -77,7 +88,7 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([signedInRoute.addChildren([searchRoute, catalogRoute, requestsRoute]), loginRoute]);
+const routeTree = rootRoute.addChildren([signedInRoute.addChildren([searchRoute, catalogRoute, gameRoute, requestsRoute]), loginRoute]);
 
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({ routeTree, context: { queryClient }, defaultPreload: 'intent' });

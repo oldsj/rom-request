@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -218,6 +219,87 @@ func (s *Server) RequestCatalogGame(ctx context.Context, req api.RequestCatalogG
 		return nil, err
 	}
 	return api.RequestCatalogGame201JSONResponse(toRequest(r)), nil
+}
+
+// GetCatalogGame returns one game's details.
+func (s *Server) GetCatalogGame(ctx context.Context, req api.GetCatalogGameRequestObject) (api.GetCatalogGameResponseObject, error) {
+	if _, ok := userFrom(ctx); !ok {
+		return api.GetCatalogGame401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
+	}
+	if s.catalog == nil || s.lib == nil {
+		return api.GetCatalogGame503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errCatalogOff)}, nil
+	}
+	folder := req.Params.Platform
+	names, err := s.lib.Games(folder)
+	if errors.Is(err, library.ErrUnknownPlatform) {
+		return api.GetCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errUnknownPlatform)}, nil
+	}
+	if err != nil {
+		s.log.ErrorContext(ctx, "list library games", "err", err)
+		return api.GetCatalogGame503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errLibraryRead)}, nil
+	}
+	slug := s.catalogSlug(folder)
+	known, err := s.catalog.Platforms(ctx, []string{slug})
+	if err != nil {
+		s.log.WarnContext(ctx, "igdb platforms", "err", err)
+		return api.GetCatalogGame502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errCatalog)}, nil
+	}
+	platform, ok := known[slug]
+	if !ok {
+		return api.GetCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotInCatalog)}, nil
+	}
+	d, err := s.catalog.Details(ctx, req.GameId, platform.ID)
+	if errors.Is(err, igdb.ErrNotFound) {
+		return api.GetCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errGameNotFound)}, nil
+	}
+	if err != nil {
+		s.log.WarnContext(ctx, "igdb game", "err", err)
+		return api.GetCatalogGame502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errCatalog)}, nil
+	}
+	key := library.TitleKey(d.Name)
+	out := api.GetCatalogGame200JSONResponse{
+		Id: d.ID, Name: d.Name, InLibrary: key != "" && slices.ContainsFunc(names, func(n string) bool { return library.TitleKey(n) == key }),
+		Genres: d.Genres, Developers: d.Developers, Screenshots: d.Screenshots, Videos: make([]api.CatalogVideo, len(d.Videos)),
+	}
+	for i, v := range d.Videos {
+		out.Videos[i] = api.CatalogVideo{Name: v.Name, YoutubeId: v.YouTubeID}
+	}
+	if d.Year != 0 {
+		out.Year = &d.Year
+	}
+	if d.Summary != "" {
+		out.Summary = &d.Summary
+	}
+	if d.Storyline != "" {
+		out.Storyline = &d.Storyline
+	}
+	if d.Rating > 0 {
+		out.Rating = &d.Rating
+	}
+	if d.CoverID != "" {
+		out.CoverId = &d.CoverID
+	}
+	return out, nil
+}
+
+// GetCatalogScreenshot relays a screenshot from IGDB's image server.
+func (s *Server) GetCatalogScreenshot(ctx context.Context, req api.GetCatalogScreenshotRequestObject) (api.GetCatalogScreenshotResponseObject, error) {
+	if _, ok := userFrom(ctx); !ok {
+		return api.GetCatalogScreenshot401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
+	}
+	if s.catalog == nil {
+		return api.GetCatalogScreenshot503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errCatalogOff)}, nil
+	}
+	body, size, err := s.catalog.Screenshot(ctx, req.ImageId)
+	if err != nil {
+		s.log.WarnContext(ctx, "igdb screenshot", "err", err)
+		return api.GetCatalogScreenshot502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errCatalog)}, nil
+	}
+	return api.GetCatalogScreenshot200ImagejpegResponse{
+		Body:          limitedBody{Reader: io.LimitReader(body, igdb.MaxCoverBytes), Closer: body},
+		ContentLength: max(size, 0),
+		Headers:       api.GetCatalogScreenshot200ResponseHeaders{CacheControl: "private, max-age=2592000, immutable"},
+	}, nil
 }
 
 // GetCatalogCover relays a cover from IGDB's image server.

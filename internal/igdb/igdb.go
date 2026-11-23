@@ -276,6 +276,104 @@ func (c *Client) Game(ctx context.Context, id, platformID int64) (Game, error) {
 	return g, nil
 }
 
+// Details is one game's page.
+type Details struct {
+	Game
+	Storyline   string
+	Rating      int // 0 when unrated
+	Genres      []string
+	Developers  []string
+	Screenshots []string // image ids
+	Videos      []Video
+}
+
+// Video is a trailer or gameplay video on YouTube.
+type Video struct {
+	Name      string
+	YouTubeID string
+}
+
+const (
+	maxScreenshots = 12
+	maxVideos      = 6
+)
+
+var youtubeIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
+// Details looks up one game's details by id, on a platform.
+func (c *Client) Details(ctx context.Context, id, platformID int64) (Details, error) {
+	var raw []struct {
+		ID               int64   `json:"id"`
+		Name             string  `json:"name"`
+		Platforms        []int64 `json:"platforms"`
+		FirstReleaseDate int64   `json:"first_release_date"`
+		Summary          string  `json:"summary"`
+		Storyline        string  `json:"storyline"`
+		TotalRating      float64 `json:"total_rating"`
+		Cover            *struct {
+			ImageID string `json:"image_id"`
+		} `json:"cover"`
+		Genres []struct {
+			Name string `json:"name"`
+		} `json:"genres"`
+		InvolvedCompanies []struct {
+			Developer bool `json:"developer"`
+			Company   struct {
+				Name string `json:"name"`
+			} `json:"company"`
+		} `json:"involved_companies"`
+		Screenshots []struct {
+			ImageID string `json:"image_id"`
+		} `json:"screenshots"`
+		Videos []struct {
+			Name    string `json:"name"`
+			VideoID string `json:"video_id"`
+		} `json:"videos"`
+	}
+	q := fmt.Sprintf("fields name,platforms,first_release_date,summary,storyline,total_rating,cover.image_id,"+
+		"genres.name,involved_companies.developer,involved_companies.company.name,screenshots.image_id,"+
+		"videos.name,videos.video_id; where id = %d; limit 1;", id)
+	if err := c.query(ctx, "games", q, &raw); err != nil {
+		return Details{}, err
+	}
+	if len(raw) == 0 || raw[0].Name == "" || !slices.Contains(raw[0].Platforms, platformID) {
+		return Details{}, ErrNotFound
+	}
+	r := raw[0]
+	d := Details{Game: Game{ID: r.ID, Name: r.Name, Summary: r.Summary}, Storyline: r.Storyline, Rating: int(r.TotalRating + 0.5)}
+	if r.FirstReleaseDate != 0 {
+		d.Year = time.Unix(r.FirstReleaseDate, 0).UTC().Year()
+	}
+	if r.Cover != nil && ValidImageID(r.Cover.ImageID) {
+		d.CoverID = r.Cover.ImageID
+	}
+	d.Genres = []string{}
+	for _, g := range r.Genres {
+		if g.Name != "" {
+			d.Genres = append(d.Genres, g.Name)
+		}
+	}
+	d.Developers = []string{}
+	for _, ic := range r.InvolvedCompanies {
+		if ic.Developer && ic.Company.Name != "" && !slices.Contains(d.Developers, ic.Company.Name) {
+			d.Developers = append(d.Developers, ic.Company.Name)
+		}
+	}
+	d.Screenshots = []string{}
+	for _, sc := range r.Screenshots {
+		if ValidImageID(sc.ImageID) && len(d.Screenshots) < maxScreenshots {
+			d.Screenshots = append(d.Screenshots, sc.ImageID)
+		}
+	}
+	d.Videos = []Video{}
+	for _, v := range r.Videos {
+		if youtubeIDRe.MatchString(v.VideoID) && len(d.Videos) < maxVideos {
+			d.Videos = append(d.Videos, Video{Name: v.Name, YouTubeID: v.VideoID})
+		}
+	}
+	return d, nil
+}
+
 // cleanSearch makes user text safe inside an Apicalypse string: no quotes, backslashes or
 // control characters, at most 100 bytes.
 func cleanSearch(s string) string {
@@ -307,26 +405,35 @@ var imageIDRe = regexp.MustCompile(`^[a-z0-9]{1,40}$`)
 // ValidImageID reports whether id looks like an IGDB image id.
 func ValidImageID(id string) bool { return imageIDRe.MatchString(id) }
 
-// MaxCoverBytes caps a cover.
+// MaxCoverBytes caps a cover or screenshot.
 const MaxCoverBytes = 2 << 20
 
 // Cover fetches a cover (264×374 JPEG). The caller closes the body.
 func (c *Client) Cover(ctx context.Context, imageID string) (io.ReadCloser, int64, error) {
+	return c.image(ctx, "t_cover_big", imageID)
+}
+
+// Screenshot fetches a screenshot (889×500 JPEG). The caller closes the body.
+func (c *Client) Screenshot(ctx context.Context, imageID string) (io.ReadCloser, int64, error) {
+	return c.image(ctx, "t_screenshot_big", imageID)
+}
+
+func (c *Client) image(ctx context.Context, size, imageID string) (io.ReadCloser, int64, error) {
 	if !ValidImageID(imageID) {
 		return nil, 0, errors.New("igdb: invalid image id")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ImageURL+"/t_cover_big/"+imageID+".jpg", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ImageURL+"/"+size+"/"+imageID+".jpg", nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%w: cover: %w", ErrUnavailable, err)
+		return nil, 0, fmt.Errorf("%w: image: %w", ErrUnavailable, err)
 	}
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > MaxCoverBytes ||
 		!strings.HasPrefix(resp.Header.Get("Content-Type"), "image/jpeg") {
 		_ = resp.Body.Close()
-		return nil, 0, fmt.Errorf("%w: cover: status %d, %s", ErrUnavailable, resp.StatusCode, resp.Header.Get("Content-Type"))
+		return nil, 0, fmt.Errorf("%w: image: status %d, %s", ErrUnavailable, resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 	return resp.Body, resp.ContentLength, nil
 }

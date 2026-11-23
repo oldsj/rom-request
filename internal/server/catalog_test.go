@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,7 +77,14 @@ func newFakeIGDB(t *testing.T) *fakeIGDB {
 			if m := regexp.MustCompile(`where id = (\d+);`).FindStringSubmatch(q); m != nil {
 				for _, g := range gbaGames {
 					if strings.HasPrefix(g, `{"id":`+m[1]+`,`) {
-						_, _ = io.WriteString(w, "["+strings.Replace(g, "{", `{"platforms":[24],`, 1)+"]")
+						extra := `{"platforms":[24],`
+						if strings.Contains(q, "screenshots.image_id") { // the details page
+							extra += `"storyline":"A long time ago.","total_rating":87.6,"genres":[{"id":1,"name":"Adventure"}],` +
+								`"involved_companies":[{"id":1,"developer":true,"company":{"id":1,"name":"Capcom"}},{"id":2,"developer":false,"company":{"id":2,"name":"Nintendo"}}],` +
+								`"screenshots":[{"id":1,"image_id":"sc1abc"},{"id":2,"image_id":"../bad"}],` +
+								`"videos":[{"id":1,"name":"Trailer","video_id":"dQw4w9WgXcQ"},{"id":2,"name":"Bad","video_id":"x\"y"}],`
+						}
+						_, _ = io.WriteString(w, "["+strings.Replace(g, "{", extra, 1)+"]")
 						return
 					}
 				}
@@ -102,8 +110,8 @@ func newFakeIGDB(t *testing.T) *fakeIGDB {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	mux.HandleFunc("GET /img/t_cover_big/{name}", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("name") != "co1abc.jpg" {
+	mux.HandleFunc("GET /img/{size}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if want := map[string]string{"t_cover_big": "co1abc.jpg", "t_screenshot_big": "sc1abc.jpg"}[r.PathValue("size")]; r.PathValue("name") != want {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -272,5 +280,38 @@ func TestCatalogOff(t *testing.T) {
 	}
 	if code, body, _ := c.do("GET", "/api/catalog/platforms", nil); code != 503 || errCode(body) != "not_configured" {
 		t.Errorf("platforms: %d %v", code, body)
+	}
+}
+
+func TestCatalogGameDetails(t *testing.T) {
+	c, _, _ := newCatalogServer(t)
+	code, g, _ := c.do("GET", "/api/catalog/games/1?platform=gba", nil)
+	if code != 200 || g["name"] != "The Legend of Zelda: The Minish Cap" || g["inLibrary"] != true || g["year"] != float64(2004) ||
+		g["storyline"] != "A long time ago." || g["rating"] != float64(88) || g["coverId"] != "co1abc" {
+		t.Fatalf("details: %d %v", code, g)
+	}
+	// Only developers; only well-formed image and video ids.
+	if fmt.Sprint(g["genres"], g["developers"], g["screenshots"]) != "[Adventure] [Capcom] [sc1abc]" {
+		t.Errorf("lists: %v %v %v", g["genres"], g["developers"], g["screenshots"])
+	}
+	if v := g["videos"].([]any); len(v) != 1 || v[0].(map[string]any)["youtubeId"] != "dQw4w9WgXcQ" {
+		t.Errorf("videos: %v", g["videos"])
+	}
+	if code, g, _ := c.do("GET", "/api/catalog/games/2?platform=gba", nil); code != 200 || g["inLibrary"] != false {
+		t.Errorf("not in library: %d %v", code, g)
+	}
+	for path, want := range map[string]int{
+		"/api/catalog/games/99?platform=gba": 404, // not in IGDB
+		"/api/catalog/games/1?platform=n64":  404, // not a library folder
+		"/api/catalog/games/0?platform=gba":  400,
+		"/api/catalog/screenshots/sc1abc":    200,
+		"/api/catalog/screenshots/nope":      502,
+	} {
+		if code, _, _ := c.do("GET", path, nil); code != want {
+			t.Errorf("%s: %d, want %d", path, code, want)
+		}
+	}
+	if code, _, _ := c.other().do("GET", "/api/catalog/games/1?platform=gba", nil); code != 401 {
+		t.Errorf("signed out: %d", code)
 	}
 }

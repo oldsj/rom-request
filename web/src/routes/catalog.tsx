@@ -103,11 +103,7 @@ function Games({ platform, q, sort }: { platform: string; q?: string | undefined
     },
   );
   const items = games.data?.pages.flatMap((p) => p.items) ?? [];
-  const requests = $api.useQuery('get', '/catalog/requests', { params: { query: { platform } } }, {
-    // Follow requests while any is still moving.
-    refetchInterval: (q) => (q.state.data?.items.some((r) => isActive(r.status)) ? 5000 : false),
-  });
-  const byGame = new Map((requests.data?.items ?? []).map((r) => [r.gameId, r]));
+  const byGame = useCatalogRequests(platform);
 
   if (games.isPending) return <Notice>Loading…</Notice>;
   // A failed first page; a failed later page shows under the list instead.
@@ -130,9 +126,19 @@ function Games({ platform, q, sort }: { platform: string; q?: string | undefined
   );
 }
 
+/** The user's catalog requests on a platform by game id, followed while any is still moving. */
+export function useCatalogRequests(platform: string) {
+  const requests = $api.useQuery('get', '/catalog/requests', { params: { query: { platform } } }, {
+    refetchInterval: (q) => (q.state.data?.items.some((r) => isActive(r.status)) ? 5000 : false),
+  });
+  return new Map((requests.data?.items ?? []).map((r) => [r.gameId, r]));
+}
+
 function GameCard({ game, platform, request }: { game: CatalogGame; platform: string; request?: RomRequest | undefined }) {
+  const details = { to: '/games/$gameId', params: { gameId: String(game.id) }, search: { platform } } as const;
   return (
     <li className="bg-surface border-border rounded-panel flex flex-col overflow-hidden border">
+      <Link {...details} tabIndex={-1} aria-hidden="true">
       {game.coverId ? (
         <img
           src={`/api/catalog/covers/${encodeURIComponent(game.coverId)}`}
@@ -143,10 +149,13 @@ function GameCard({ game, platform, request }: { game: CatalogGame; platform: st
           className="bg-muted aspect-[264/374] w-full object-cover"
         />
       ) : (
-        <div aria-hidden="true" className="bg-muted aspect-[264/374] w-full" />
+        <div className="bg-muted aspect-[264/374] w-full" />
       )}
+      </Link>
       <div className="flex flex-1 flex-col gap-2 p-3">
-        <h2 className="text-sm leading-snug font-medium break-words" title={game.summary}>{game.name}</h2>
+        <h2 className="text-sm leading-snug font-medium break-words" title={game.summary}>
+          <Link {...details} className="hover:underline">{game.name}</Link>
+        </h2>
         {game.year !== undefined && <p className="text-muted-foreground text-xs">{game.year}</p>}
         <div className="mt-auto">
           <RequestState game={game} platform={platform} request={request} />
@@ -156,8 +165,10 @@ function GameCard({ game, platform, request }: { game: CatalogGame; platform: st
   );
 }
 
+type Requestable = Pick<CatalogGame, 'id' | 'name' | 'inLibrary'>;
+
 /** A game's state: in the library, its request's progress, or a button to request it. */
-function RequestState({ game, platform, request: r }: { game: CatalogGame; platform: string; request?: RomRequest | undefined }) {
+export function RequestState({ game, platform, request: r }: { game: Requestable; platform: string; request?: RomRequest | undefined }) {
   const queryClient = useQueryClient();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['get', '/catalog/requests'] });
   const create = $api.useMutation('post', '/catalog/requests', { onSettled: refresh });
