@@ -22,51 +22,87 @@ const MaxTorrentBytes = 10 << 20
 // ErrInvalid means the input is not a usable torrent or magnet link.
 var ErrInvalid = errors.New("torrent: invalid")
 
-// Source is what to hand qBittorrent: a .torrent file or a magnet link, and its id.
+// Source is what to hand qBittorrent: a .torrent file or a magnet link, and its ids.
 type Source struct {
 	File   []byte
 	Magnet string
-	// Hash is qBittorrent's id for the torrent: the v1 info-hash, or for a v2-only torrent the
-	// v2 info-hash truncated to 20 bytes. Lower-case hex.
+	// Hash identifies the torrent across requests: the v1 info-hash, or for a v2-only torrent
+	// the v2 info-hash truncated to 20 bytes. Lower-case hex.
 	Hash string
+	// IDs are every id qBittorrent may know the torrent by. A hybrid (v1 + v2) torrent is its
+	// v1 hash on libtorrent 1.2 builds and its truncated v2 hash on libtorrent 2.x builds
+	// (which prefer v2), so both are listed. Hash is always among them.
+	IDs []string
 }
 
-// ID computes the id of a .torrent file.
-func ID(file []byte) (string, error) {
+func newSource(v1, v2 string) Source {
+	src := Source{Hash: v1}
+	if v1 == "" {
+		src.Hash = v2
+	}
+	for _, id := range []string{v1, v2} {
+		if id != "" {
+			src.IDs = append(src.IDs, id)
+		}
+	}
+	return src
+}
+
+// Identify computes the ids of a .torrent file.
+func Identify(file []byte) (Source, error) {
 	info, err := infoDict(file)
 	if err != nil {
-		return "", err
+		return Source{}, err
 	}
-	if v2Only(info) {
+	hasV1, hasV2 := versions(info)
+	var v1, v2 string
+	if hasV1 {
+		sum := sha1.Sum(info) //nolint:gosec // see import
+		v1 = hex.EncodeToString(sum[:])
+	}
+	if hasV2 {
 		sum := sha256.Sum256(info)
-		return hex.EncodeToString(sum[:20]), nil
+		v2 = hex.EncodeToString(sum[:20])
 	}
-	sum := sha1.Sum(info) //nolint:gosec // see import
-	return hex.EncodeToString(sum[:]), nil
+	src := newSource(v1, v2)
+	src.File = file
+	return src, nil
 }
 
-// MagnetID reads the id from a magnet link's xt parameter (btih in hex or base32, or btmh).
-func MagnetID(magnet string) (string, error) {
+// ID is the identifying Hash of a .torrent file.
+func ID(file []byte) (string, error) {
+	src, err := Identify(file)
+	return src.Hash, err
+}
+
+// IsMagnet reports whether link is a magnet link (and not, say, an http link that leads to one).
+func IsMagnet(link string) bool {
+	u, err := url.Parse(link)
+	return err == nil && u.Scheme == "magnet"
+}
+
+// ParseMagnet reads a magnet link's ids from its xt parameters (btih in hex or base32, btmh).
+func ParseMagnet(magnet string) (Source, error) {
 	u, err := url.Parse(magnet)
 	if err != nil || u.Scheme != "magnet" {
-		return "", fmt.Errorf("%w: not a magnet link", ErrInvalid)
+		return Source{}, fmt.Errorf("%w: not a magnet link", ErrInvalid)
 	}
-	var v2 string
+	var v1, v2 string
 	for _, xt := range u.Query()["xt"] {
 		switch {
-		case strings.HasPrefix(xt, "urn:btih:"):
+		case strings.HasPrefix(xt, "urn:btih:") && v1 == "":
 			h := strings.TrimPrefix(xt, "urn:btih:")
 			switch len(h) {
 			case 40:
 				if _, err := hex.DecodeString(h); err == nil {
-					return strings.ToLower(h), nil
+					v1 = strings.ToLower(h)
 				}
 			case 32:
 				if b, err := base32.StdEncoding.DecodeString(strings.ToUpper(h)); err == nil {
-					return hex.EncodeToString(b), nil
+					v1 = hex.EncodeToString(b)
 				}
 			}
-		case strings.HasPrefix(xt, "urn:btmh:1220"):
+		case strings.HasPrefix(xt, "urn:btmh:1220") && v2 == "":
 			// A multihash: 0x12 (sha2-256), 0x20 (32 bytes), then the v2 info-hash.
 			h := strings.TrimPrefix(xt, "urn:btmh:1220")
 			if b, err := hex.DecodeString(h); err == nil && len(b) == 32 {
@@ -74,30 +110,40 @@ func MagnetID(magnet string) (string, error) {
 			}
 		}
 	}
-	if v2 != "" {
-		return v2, nil
+	if v1 == "" && v2 == "" {
+		return Source{}, fmt.Errorf("%w: magnet link has no info-hash", ErrInvalid)
 	}
-	return "", fmt.Errorf("%w: magnet link has no info-hash", ErrInvalid)
+	src := newSource(v1, v2)
+	src.Magnet = magnet
+	return src, nil
 }
 
-// Resolve turns a release into a Source: the magnet link if there is one, otherwise the
-// .torrent file at downloadURL, which may itself redirect to a magnet link (Prowlarr does
-// that for some indexers). downloadURL comes from server configuration, never from a user.
+// MagnetID is the identifying Hash of a magnet link.
+func MagnetID(magnet string) (string, error) {
+	src, err := ParseMagnet(magnet)
+	return src.Hash, err
+}
+
+// Resolve turns a release into a Source. A magnet link is used as it is. Otherwise the release
+// is fetched: its download link, or its magnet link when that is really an http link
+// (Prowlarr's search API rewrites both into links to its own download proxy, which answers
+// with the .torrent file or a redirect to the magnet link). The links come from Prowlarr's
+// results, which the server keeps; never from a user.
 func Resolve(ctx context.Context, hc *http.Client, magnet, downloadURL string) (Source, error) {
-	if magnet != "" {
-		id, err := MagnetID(magnet)
-		if err != nil {
-			return Source{}, err
-		}
-		return Source{Magnet: magnet, Hash: id}, nil
+	if IsMagnet(magnet) {
+		return ParseMagnet(magnet)
 	}
-	if downloadURL == "" {
+	link := downloadURL
+	if link == "" {
+		link = magnet
+	}
+	if link == "" {
 		return Source{}, fmt.Errorf("%w: release has no download link", ErrInvalid)
 	}
 	noFollow := *hc
 	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-	next := downloadURL
+	next := link
 	for range 5 {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, next, nil)
 		if err != nil {
@@ -116,17 +162,16 @@ func Resolve(ctx context.Context, hc *http.Client, magnet, downloadURL string) (
 				return Source{}, fmt.Errorf("%w: redirect without a location", ErrInvalid)
 			}
 			if loc.Scheme == "magnet" {
-				id, err := MagnetID(loc.String())
-				if err != nil {
-					return Source{}, err
-				}
-				return Source{Magnet: loc.String(), Hash: id}, nil
+				return ParseMagnet(loc.String())
 			}
 			if loc.Scheme != "http" && loc.Scheme != "https" {
 				return Source{}, fmt.Errorf("%w: redirect to %s", ErrInvalid, loc.Scheme)
 			}
 			next = loc.String()
 			continue
+		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+			// The indexer no longer has the release; asking again won't help.
+			return Source{}, fmt.Errorf("%w: release gone (status %d)", ErrInvalid, resp.StatusCode)
 		case resp.StatusCode != http.StatusOK:
 			return Source{}, fmt.Errorf("torrent: fetch: status %d", resp.StatusCode)
 		case readErr != nil:
@@ -134,11 +179,7 @@ func Resolve(ctx context.Context, hc *http.Client, magnet, downloadURL string) (
 		case len(body) > MaxTorrentBytes:
 			return Source{}, fmt.Errorf("%w: .torrent file over %d bytes", ErrInvalid, MaxTorrentBytes)
 		}
-		id, err := ID(body)
-		if err != nil {
-			return Source{}, err
-		}
-		return Source{File: body, Hash: id}, nil
+		return Identify(body)
 	}
 	return Source{}, fmt.Errorf("%w: too many redirects", ErrInvalid)
 }
@@ -179,29 +220,31 @@ func infoDict(b []byte) ([]byte, error) {
 	return nil, fmt.Errorf("%w: no info dictionary", ErrInvalid)
 }
 
-// v2Only reports whether an info dictionary is BitTorrent v2 without v1 compatibility: it has
-// "meta version" 2 and no "pieces".
-func v2Only(info []byte) bool {
-	var version2, pieces bool
+// versions reports which BitTorrent versions an info dictionary carries: v1 has "pieces", v2
+// has "meta version" 2. A hybrid has both.
+func versions(info []byte) (v1, v2 bool) {
 	i := 1
 	for i < len(info) && info[i] != 'e' {
 		key, end, err := bstring(info, i)
 		if err != nil {
-			return false
+			return true, false
 		}
 		valEnd, err := skip(info, end, 0)
 		if err != nil {
-			return false
+			return true, false
 		}
 		switch key {
 		case "meta version":
-			version2 = string(info[end:valEnd]) == "i2e"
+			v2 = string(info[end:valEnd]) == "i2e"
 		case "pieces":
-			pieces = true
+			v1 = true
 		}
 		i = valEnd
 	}
-	return version2 && !pieces
+	if !v1 && !v2 {
+		v1 = true // not a valid torrent either way; hash it as v1, as clients would
+	}
+	return v1, v2
 }
 
 // bstring reads a byte string at b[i:], returning it and the index after it.

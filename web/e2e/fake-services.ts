@@ -1,7 +1,9 @@
 // Stand-ins for Prowlarr and qBittorrent, so the e2e test can follow a request from search to the
 // library against the real binary. One port serves both APIs (their paths don't overlap). A
 // torrent "downloads" the moment it is added: its file is written into the save path, which the
-// e2e config makes the same folder as the app's DOWNLOAD_DIR.
+// e2e config makes the same folder as the app's DOWNLOAD_DIR. Like the real services: Prowlarr's
+// search gives the magnet link as a link to its download proxy, which redirects to the magnet;
+// qBittorrent (5.2+) answers a refused add with 409.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -10,6 +12,7 @@ const port = Number(process.env.FAKE_PORT ?? '18090');
 const apiKey = process.env.FAKE_PROWLARR_KEY ?? '';
 const hash = '0123456789abcdef0123456789abcdef01234567';
 const romBytes = 'e2e homebrew rom';
+const magnet = `magnet:?xt=urn:btih:${hash}&dn=Homebrew+Quest`;
 
 const torrents = new Map<string, { savePath: string }>();
 
@@ -22,7 +25,7 @@ const releases = [
     seeders: 12,
     protocol: 'torrent',
     infoUrl: 'https://example.com/homebrew-quest',
-    magnetUrl: `magnet:?xt=urn:btih:${hash}&dn=Homebrew+Quest`,
+    magnetUrl: `http://127.0.0.1:${String(port)}/1/download?apikey=${apiKey}&file=Homebrew+Quest`,
     categories: [{ id: 1000, name: 'Console' }],
   },
 ];
@@ -58,14 +61,26 @@ const server = createServer((req, res) => {
       json(releases);
       return;
     }
+    if (url.pathname === '/1/download') {
+      if (url.searchParams.get('apikey') !== apiKey) {
+        res.statusCode = 401;
+        res.end();
+        return;
+      }
+      res.statusCode = 301;
+      res.setHeader('Location', magnet);
+      res.end();
+      return;
+    }
     if (url.pathname === '/api/v2/auth/login') {
       res.end('Ok.'); // qBittorrent with authentication bypassed for this client
       return;
     }
     if (url.pathname === '/api/v2/torrents/add') {
       const savePath = f.get('savepath') ?? '';
-      if (!f.get('urls')?.includes(hash) || torrents.has(hash)) {
-        res.end('Fails.');
+      if (f.get('urls') !== magnet || torrents.has(hash)) {
+        res.statusCode = 409;
+        json({ success_count: 0, failure_count: 1, pending_count: 0 });
         return;
       }
       mkdirSync(savePath, { recursive: true });
@@ -75,7 +90,8 @@ const server = createServer((req, res) => {
       return;
     }
     if (url.pathname === '/api/v2/torrents/info') {
-      const t = torrents.get(url.searchParams.get('hashes') ?? '');
+      const wanted = (url.searchParams.get('hashes') ?? '').split('|');
+      const t = wanted.includes(hash) ? torrents.get(hash) : undefined;
       json(t ? [{ hash, name: 'Homebrew Quest.gba', state: 'stalledUP', progress: 1, save_path: t.savePath, size: romBytes.length }] : []);
       return;
     }

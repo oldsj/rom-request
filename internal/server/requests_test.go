@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oldsj/rom-request/internal/config"
 	"github.com/oldsj/rom-request/internal/qbittorrent"
@@ -249,9 +251,15 @@ func TestCancelAndRemovedTorrent(t *testing.T) {
 	}
 
 	// A torrent removed in qBittorrent fails the request with a way forward; retry re-adds it.
+	// Not at once: qBittorrent adds torrents in the background.
 	r.qb.mu.Lock()
 	clear(r.qb.torrents)
 	r.qb.mu.Unlock()
+	r.tick()
+	if got := r.request(r.client, b["id"].(string)); got["status"] != "downloading" {
+		t.Fatalf("failed within the grace period: %v", got)
+	}
+	r.srv.Worker().SetClock(func() time.Time { return time.Now().Add(time.Hour) })
 	r.tick()
 	got := r.request(r.client, b["id"].(string))
 	if e, _ := got["error"].(map[string]any); got["status"] != "failed" || e["code"] != "torrent_removed" {
@@ -265,5 +273,137 @@ func TestCancelAndRemovedTorrent(t *testing.T) {
 	r.qb.mu.Unlock()
 	if n != 1 {
 		t.Errorf("torrent not re-added: %d", n)
+	}
+}
+
+// create requests a search result for GBA and returns the new request.
+func (r *rig) create(c *client, releaseID string) map[string]any {
+	r.t.Helper()
+	code, body, _ := c.do("POST", "/api/requests", map[string]string{"releaseId": releaseID, "platform": "GBA"})
+	if code != 201 {
+		r.t.Fatalf("create: %d %v", code, body)
+	}
+	return body
+}
+
+func TestHybridTorrent(t *testing.T) {
+	r := newRig(t)
+	r.prowlarr.addHybridRelease("Homebrew Hybrid", "hybrid.gba", 4)
+	r.do("POST", "/api/auth/signup", creds)
+	req := r.create(r.client, r.search(r.client)["Homebrew Hybrid"])
+	if req["status"] != "downloading" {
+		t.Fatalf("create: %v", req)
+	}
+	// qBittorrent (libtorrent 2.x) knows it by its v2 id, not the v1 hash.
+	tor := r.qb.only(t)
+	if tor.Hash == tor.InfohashV1 {
+		t.Fatalf("fake used the v1 hash as the id: %+v", tor)
+	}
+	r.finish(tor.Hash, req["id"].(string), "hybrid.gba", "abcd")
+	r.tick()
+	if got := r.request(r.client, req["id"].(string)); got["status"] != "imported" {
+		t.Fatalf("hybrid: %v", got)
+	}
+}
+
+func TestQBittorrentRefuses(t *testing.T) {
+	r := newRig(t)
+	r.prowlarr.addTorrentRelease("Homebrew Racer", "racer.gba", 4)
+	r.do("POST", "/api/auth/signup", creds)
+	r.qb.mu.Lock()
+	r.qb.reject = true
+	r.qb.mu.Unlock()
+	req := r.create(r.client, r.search(r.client)["Homebrew Racer"])
+	if e, _ := req["error"].(map[string]any); req["status"] != "failed" || e["code"] != "qbittorrent_rejected" {
+		t.Fatalf("refused add: %v", req)
+	}
+}
+
+func TestQBittorrentDown(t *testing.T) {
+	r := newRig(t)
+	r.prowlarr.addTorrentRelease("Homebrew Racer", "racer.gba", 4)
+	r.do("POST", "/api/auth/signup", creds)
+	ids := r.search(r.client)
+
+	// Down while requesting: the request waits in the queue.
+	r.qb.setDown(true)
+	req := r.create(r.client, ids["Homebrew Racer"])
+	id := req["id"].(string)
+	if req["status"] != "queued" {
+		t.Fatalf("create while down: %v", req)
+	}
+	fetched := r.prowlarr.fetches.Load()
+
+	// The worker backs off between attempts and gives up in the end, without fetching the
+	// release from the indexer again each time.
+	w := r.srv.Worker()
+	ahead := time.Duration(0)
+	for i := range 10 {
+		ahead += 2 * time.Hour
+		w.SetClock(func() time.Time { return time.Now().Add(ahead) })
+		_ = w.Tick(t.Context())
+		got := r.request(r.client, id)
+		if want := map[bool]string{true: "failed", false: "queued"}[i == 9]; got["status"] != want {
+			t.Fatalf("attempt %d: %v", i+1, got)
+		}
+	}
+	if e, _ := r.request(r.client, id)["error"].(map[string]any); e["code"] != "submit_failed" {
+		t.Errorf("gave up with %v", e)
+	}
+	if n := r.prowlarr.fetches.Load(); n != fetched {
+		t.Errorf("release fetched %d more times while qBittorrent was down", n-fetched)
+	}
+	w.SetClock(time.Now)
+
+	// Back up: retry adds it.
+	r.qb.setDown(false)
+	if code, body, _ := r.do("POST", "/api/requests/"+id+"/retry", nil); code != 200 || body["status"] != "downloading" {
+		t.Fatalf("retry: %d %v", code, body)
+	}
+
+	// Removing while qBittorrent is down works; the torrent goes once it's back.
+	r.qb.setDown(true)
+	if code, _, _ := r.do("DELETE", "/api/requests/"+id, nil); code != 204 {
+		t.Fatalf("delete while down: %d", code)
+	}
+	if _, l, _ := r.do("GET", "/api/requests", nil); len(l["items"].([]any)) != 0 {
+		t.Errorf("removed request still listed: %v", l)
+	}
+	_ = w.Tick(t.Context())
+	r.qb.setDown(false)
+	r.qb.only(t)
+	r.tick()
+	r.qb.mu.Lock()
+	left, deleted := len(r.qb.torrents), len(r.qb.deleted)
+	r.qb.mu.Unlock()
+	if left != 0 || deleted != 1 {
+		t.Errorf("after qBittorrent came back: %d torrents, %d deletes", left, deleted)
+	}
+}
+
+func TestImportInterruptedByShutdown(t *testing.T) {
+	r := newRig(t)
+	r.prowlarr.addTorrentRelease("Homebrew Racer", "racer.gba", 4)
+	r.do("POST", "/api/auth/signup", creds)
+	req := r.create(r.client, r.search(r.client)["Homebrew Racer"])
+	id := req["id"].(string)
+	tor := r.qb.only(t)
+	r.finish(tor.Hash, id, "racer.gba", "rom!")
+
+	// Shutdown begins during the import: it's handed back, not left importing.
+	ctx, cancel := context.WithCancel(t.Context())
+	r.qb.mu.Lock()
+	r.qb.onFiles = cancel
+	r.qb.mu.Unlock()
+	_ = r.srv.Worker().Tick(ctx)
+	if got := r.request(r.client, id); got["status"] != "downloading" {
+		t.Fatalf("after shutdown: %v", got)
+	}
+	r.qb.mu.Lock()
+	r.qb.onFiles = nil
+	r.qb.mu.Unlock()
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "imported" {
+		t.Fatalf("next round: %v", got)
 	}
 }

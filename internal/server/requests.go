@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -20,6 +21,13 @@ import (
 
 // searchResultTTL is how long a search result can be requested.
 const searchResultTTL = time.Hour
+
+// Deadlines for the integration calls a request makes, so a response comes well inside the
+// server's 30 s write timeout.
+const (
+	resolveTimeout = 15 * time.Second
+	submitTimeout  = 10 * time.Second
+)
 
 var (
 	errSearchOff    = apiError("not_configured", "Search isn't set up on this server: it needs Prowlarr.")
@@ -34,7 +42,6 @@ var (
 	errDuplicate    = apiError("already_requested", "This release has already been requested.")
 	errNotFailed    = apiError("not_failed", "Only a failed request can be retried.")
 	errImporting    = apiError("importing", "This request is being copied into the library. Try again when it's done.")
-	errQBittorrent  = apiError("qbittorrent_unavailable", "qBittorrent didn't answer. Try again shortly.")
 )
 
 func toRequest(r dbq.Request) api.Request {
@@ -189,7 +196,9 @@ func (s *Server) CreateRequest(ctx context.Context, req api.CreateRequestRequest
 		return api.CreateRequest400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(errPlatform)}, nil
 	}
 
-	src, err := s.reqs.Resolve(ctx, sr.MagnetUrl, sr.DownloadUrl)
+	rctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	src, err := s.reqs.Resolve(rctx, sr.MagnetUrl, sr.DownloadUrl)
 	if errors.Is(err, torrent.ErrInvalid) {
 		return api.CreateRequest502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errUnreadable)}, nil
 	}
@@ -205,7 +214,7 @@ func (s *Server) CreateRequest(ctx context.Context, req api.CreateRequestRequest
 
 	r, err := s.q.CreateRequest(ctx, dbq.CreateRequestParams{
 		UserID: u.ID, Title: sr.Title, Indexer: sr.Indexer, SizeBytes: sr.SizeBytes, InfoUrl: sr.InfoUrl,
-		DownloadUrl: sr.DownloadUrl, MagnetUrl: sr.MagnetUrl, TorrentHash: src.Hash,
+		DownloadUrl: sr.DownloadUrl, MagnetUrl: sr.MagnetUrl, TorrentHash: src.Hash, TorrentIds: src.IDs,
 		Platform: req.Body.Platform, License: strings.TrimSpace(deref(req.Body.License)),
 		SourceUrl: strings.TrimSpace(deref(req.Body.SourceUrl)),
 	})
@@ -216,7 +225,9 @@ func (s *Server) CreateRequest(ctx context.Context, req api.CreateRequestRequest
 		return nil, err
 	}
 	// The worker retries a request that stays queued (qBittorrent unreachable).
-	if submitted, err := s.reqs.Submit(ctx, r, &src); err != nil {
+	sctx, cancel := context.WithTimeout(ctx, submitTimeout)
+	defer cancel()
+	if submitted, err := s.reqs.Submit(sctx, r, &src); err != nil {
 		s.log.WarnContext(ctx, "submit request", "request", r.ID, "err", err)
 	} else {
 		r = submitted
@@ -246,7 +257,9 @@ func (s *Server) RetryRequest(ctx context.Context, req api.RetryRequestRequestOb
 		return nil, err
 	}
 	if s.reqs != nil {
-		if submitted, err := s.reqs.Submit(ctx, r, nil); err != nil {
+		sctx, cancel := context.WithTimeout(ctx, resolveTimeout+submitTimeout)
+		defer cancel()
+		if submitted, err := s.reqs.Submit(sctx, r, nil); err != nil {
 			s.log.WarnContext(ctx, "resubmit request", "request", r.ID, "err", err)
 		} else {
 			r = submitted
@@ -255,34 +268,36 @@ func (s *Server) RetryRequest(ctx context.Context, req api.RetryRequestRequestOb
 	return api.RetryRequest200JSONResponse(toRequest(r)), nil
 }
 
-// DeleteRequest cancels a request (removing its torrent and partial download) or, once
-// imported, forgets it. The library is never touched.
+// DeleteRequest removes a request. Unless it was imported, its torrent and downloaded files
+// are removed from qBittorrent: now if qBittorrent answers, otherwise by the worker later. The
+// library is never touched.
 func (s *Server) DeleteRequest(ctx context.Context, req api.DeleteRequestRequestObject) (api.DeleteRequestResponseObject, error) {
 	u, ok := userFrom(ctx)
 	if !ok {
 		return api.DeleteRequest401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
 	}
-	params := dbq.GetRequestParams{ID: req.RequestId, UserID: u.ID}
-	r, err := s.q.GetRequest(ctx, params)
+	var savePath string
+	if s.reqs != nil {
+		savePath = s.reqs.SavePath(req.RequestId)
+	}
+	removed, err := s.q.RemoveRequest(ctx, dbq.RemoveRequestParams{ID: req.RequestId, UserID: u.ID, SavePath: savePath})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return api.DeleteRequest404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotFound)}, nil
+		if _, err := s.q.GetRequest(ctx, dbq.GetRequestParams{ID: req.RequestId, UserID: u.ID}); errors.Is(err, pgx.ErrNoRows) {
+			return api.DeleteRequest404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotFound)}, nil
+		} else if err != nil {
+			return nil, err
+		}
+		return api.DeleteRequest409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(errImporting)}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if r.Status == dbq.RequestStatusImporting {
-		return api.DeleteRequest409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(errImporting)}, nil
-	}
-	if s.reqs != nil {
-		if err := s.reqs.Cancel(ctx, r); err != nil {
-			s.log.WarnContext(ctx, "cancel torrent", "request", r.ID, "err", err)
-			return api.DeleteRequest502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errQBittorrent)}, nil
+	if removed.RemovalID != uuid.Nil && s.reqs != nil {
+		rctx, cancel := context.WithTimeout(ctx, submitTimeout)
+		defer cancel()
+		if err := s.reqs.Remove(rctx, removed.RemovalID); err != nil {
+			s.log.WarnContext(ctx, "remove torrent: worker will retry", "request", removed.ID, "err", err)
 		}
-	}
-	if _, err := s.q.DeleteRequest(ctx, dbq.DeleteRequestParams{ID: r.ID, UserID: u.ID}); errors.Is(err, pgx.ErrNoRows) {
-		return api.DeleteRequest409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(errImporting)}, nil
-	} else if err != nil {
-		return nil, err
 	}
 	return api.DeleteRequest204Response{}, nil
 }

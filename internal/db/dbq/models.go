@@ -82,6 +82,9 @@ type Request struct {
 	UpdatedAt      time.Time
 	StepStartedAt  time.Time
 	ImportedAt     pgtype.Timestamptz
+	TorrentIds     []string
+	SubmitAttempts int32
+	ImportClaim    pgtype.UUID
 }
 
 type SearchResult struct {
@@ -106,6 +109,13 @@ type Session struct {
 	UserID    uuid.UUID
 	CreatedAt time.Time
 	ExpiresAt time.Time
+}
+
+type TorrentRemoval struct {
+	ID         uuid.UUID
+	TorrentIds []string
+	SavePath   string
+	CreatedAt  time.Time
 }
 
 type User struct {

@@ -5,6 +5,7 @@
 package library
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -117,8 +118,9 @@ type Result struct {
 // <platform>/<file>; several files keep their layout under one folder, <platform>/<folder>,
 // which RomM reads as one multi-file game (with any license and readme files beside it). The
 // copy is staged under StagingDir and moved into place last, so RomM never sees half a game.
-// downloads is the download folder.
-func (l *Library) Import(downloads string, job Job) (Result, error) {
+// downloads is the download folder. Cancelling ctx stops the copy and leaves the library as
+// it was.
+func (l *Library) Import(ctx context.Context, downloads string, job Job) (Result, error) {
 	if len(job.Files) == 0 {
 		return Result{}, fmt.Errorf("%w: the torrent has no files", ErrIncomplete)
 	}
@@ -189,7 +191,7 @@ func (l *Library) Import(downloads string, job Job) (Result, error) {
 		if err := dst.MkdirAll(path.Dir(target), 0o775); err != nil {
 			return Result{}, fmt.Errorf("library: staging: %w", err)
 		}
-		h, err := copyFile(src, path.Join(job.SourceDir, f.Name), dst, target, f.Size)
+		h, err := copyFile(ctx, src, path.Join(job.SourceDir, f.Name), dst, target, f.Size)
 		if err != nil {
 			return Result{}, err
 		}
@@ -202,6 +204,9 @@ func (l *Library) Import(downloads string, job Job) (Result, error) {
 	// name exists) and the staged name removed with the staging folder. A folder is renamed
 	// after a last check: rename(2) would only replace an empty folder.
 	staged := path.Join(stage, entry)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if single {
 		if err := dst.Link(staged, final); err != nil {
 			if errors.Is(err, fs.ErrExist) {
@@ -222,7 +227,7 @@ func (l *Library) Import(downloads string, job Job) (Result, error) {
 
 // copyFile copies one file between roots, checking its size and syncing it to disk, and
 // returns its SHA-256.
-func copyFile(src *os.Root, from string, dst *os.Root, to string, size int64) (string, error) {
+func copyFile(ctx context.Context, src *os.Root, from string, dst *os.Root, to string, size int64) (string, error) {
 	in, err := src.Open(from)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -246,7 +251,7 @@ func copyFile(src *os.Root, from string, dst *os.Root, to string, size int64) (s
 		return "", fmt.Errorf("library: create: %w", err)
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(out, h), in)
+	n, err := io.Copy(io.MultiWriter(out, h), ctxReader{ctx, in})
 	if err == nil && n != size {
 		err = fmt.Errorf("%w: %s changed while copying", ErrIncomplete, from)
 	}
@@ -320,4 +325,17 @@ func lastRune(s string) (rune, int) {
 		}
 	}
 	return 0, 1
+}
+
+// ctxReader stops a copy once ctx ends.
+type ctxReader struct {
+	ctx context.Context //nolint:containedctx // scoped to one copy
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }

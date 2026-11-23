@@ -13,8 +13,8 @@ SELECT * FROM requests WHERE id = $1 AND user_id = $2;
 -- name: CreateRequest :one
 INSERT INTO requests (
     user_id, title, indexer, size_bytes, info_url, download_url, magnet_url,
-    torrent_hash, platform, license, source_url
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    torrent_hash, torrent_ids, platform, license, source_url
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: RequestForTorrent :one
@@ -26,15 +26,9 @@ LIMIT 1;
 -- name: RetryRequest :one
 -- Back to the queue from failed only; the worker or handler submits it again.
 UPDATE requests
-SET status = 'queued', error_code = '', error_message = '', progress = 0,
+SET status = 'queued', error_code = '', error_message = '', progress = 0, submit_attempts = 0,
     updated_at = now(), step_started_at = now()
 WHERE id = $1 AND user_id = $2 AND status = 'failed'
-RETURNING *;
-
--- name: DeleteRequest :one
--- Not while importing: the worker owns that step until it ends.
-DELETE FROM requests
-WHERE id = $1 AND user_id = $2 AND status <> 'importing'
 RETURNING *;
 
 -- name: ActiveRequests :many
@@ -47,9 +41,17 @@ LIMIT 200;
 -- name: MarkSubmitted :one
 -- Worker and handler: queued -> downloading, once qBittorrent has the torrent.
 UPDATE requests
-SET status = 'downloading', torrent_hash = $2, updated_at = now(), step_started_at = now()
+SET status = 'downloading', torrent_hash = $2, torrent_ids = $3, updated_at = now(),
+    step_started_at = now()
 WHERE id = $1 AND status = 'queued'
 RETURNING *;
+
+-- name: NoteSubmitAttempt :one
+-- Worker: a submit failed for a reason that may pass; try again after a backoff.
+UPDATE requests
+SET submit_attempts = submit_attempts + 1, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND status = 'queued'
+RETURNING submit_attempts;
 
 -- name: SetProgress :exec
 -- Worker.
@@ -58,25 +60,81 @@ SET progress = $2, updated_at = now()
 WHERE id = $1 AND status = 'downloading' AND progress <> $2;
 
 -- name: ClaimImport :one
--- Worker: take the import step. Only one pod wins a downloading request; an import left
--- behind by a crashed pod is reclaimed after `stale`.
+-- Worker: take the import step with a new claim. Only one pod wins a downloading request; an
+-- import whose holder stopped renewing it (crashed) is taken over after `stale`.
 UPDATE requests
-SET status = 'importing', progress = 1, updated_at = now(), step_started_at = now()
+SET status = 'importing', progress = 1, import_claim = sqlc.arg(claim), updated_at = now(),
+    step_started_at = now()
 WHERE id = sqlc.arg(id)
   AND (status = 'downloading'
        OR (status = 'importing' AND step_started_at < now() - sqlc.arg(stale)::interval))
 RETURNING *;
 
--- name: MarkImported :exec
--- Worker.
-UPDATE requests
-SET status = 'imported', imported_path = $2, imported_files = $3, imported_sha256 = $4,
-    imported_at = now(), updated_at = now(), step_started_at = now()
-WHERE id = $1 AND status = 'importing';
+-- name: RenewImport :execrows
+-- Worker: the holder is still importing. No rows: the claim was lost.
+UPDATE requests SET step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing';
 
--- name: MarkFailed :exec
--- Worker and handler: any live step -> failed, with a reason the user can act on.
+-- name: ReleaseImport :execrows
+-- Worker: give an unfinished import back (shutting down); the next round imports again.
+UPDATE requests
+SET status = 'downloading', import_claim = NULL, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing';
+
+-- name: MarkImported :execrows
+-- Worker, holding the claim. Prowlarr's links (which carry its key) aren't needed any more.
+UPDATE requests
+SET status = 'imported', imported_path = $3, imported_files = $4, imported_sha256 = $5,
+    import_claim = NULL, download_url = '', magnet_url = '',
+    imported_at = now(), updated_at = now(), step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing';
+
+-- name: FailImport :execrows
+-- Worker, holding the claim.
+UPDATE requests
+SET status = 'failed', error_code = $3, error_message = $4, import_claim = NULL,
+    updated_at = now(), step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing';
+
+-- name: MarkFailed :execrows
+-- Worker and handler: a queued or downloading request -> failed, from the status the caller
+-- saw, with a reason the user can act on.
 UPDATE requests
 SET status = 'failed', error_code = $2, error_message = $3, updated_at = now(),
     step_started_at = now()
-WHERE id = $1 AND status IN ('queued', 'downloading', 'importing');
+WHERE id = $1 AND status = $4 AND status IN ('queued', 'downloading');
+
+-- name: RemoveRequest :one
+-- Handler: delete a request (not while importing: the worker owns that step) and, unless it
+-- was imported, queue its torrent for removal from qBittorrent. One statement, so a request
+-- is never deleted without its cleanup.
+WITH removed AS (
+    DELETE FROM requests
+    WHERE requests.id = sqlc.arg(id) AND requests.user_id = sqlc.arg(user_id)
+      AND requests.status <> 'importing'
+    RETURNING requests.id, requests.status, requests.torrent_ids
+), queued AS (
+    INSERT INTO torrent_removals (torrent_ids, save_path)
+    SELECT removed.torrent_ids, sqlc.arg(save_path)::text FROM removed
+    WHERE removed.status <> 'imported' AND cardinality(removed.torrent_ids) > 0
+    RETURNING torrent_removals.id
+)
+-- removal_id is the nil uuid when nothing was queued.
+SELECT removed.id,
+       COALESCE((SELECT queued.id FROM queued), '00000000-0000-0000-0000-000000000000')::uuid AS removal_id
+FROM removed;
+
+-- name: QueueTorrentRemoval :one
+-- Worker: a torrent added for a request that was removed meanwhile.
+INSERT INTO torrent_removals (torrent_ids, save_path) VALUES ($1, $2) RETURNING *;
+
+-- name: TorrentRemovals :many
+-- Worker.
+SELECT * FROM torrent_removals ORDER BY created_at LIMIT 100;
+
+-- name: GetTorrentRemoval :one
+SELECT * FROM torrent_removals WHERE id = $1;
+
+-- name: DeleteTorrentRemoval :exec
+-- Worker.
+DELETE FROM torrent_removals WHERE id = $1;

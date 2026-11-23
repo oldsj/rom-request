@@ -24,6 +24,9 @@ integrations:
   qbittorrent:
     url: http://qbittorrent.torrent.svc:8080
     savePath: /media/downloads/rom-request
+podSecurity:
+  runAsUser: 1026
+  runAsGroup: 100
 storage:
   downloads:
     nfs:

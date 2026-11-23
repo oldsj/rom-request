@@ -29,8 +29,15 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
+        runAsUser: {{ .Values.podSecurity.runAsUser }}
+        runAsGroup: {{ .Values.podSecurity.runAsGroup }}
+        {{- with .Values.podSecurity.supplementalGroups }}
+        supplementalGroups:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.podSecurity.fsGroup }}
+        fsGroup: {{ . }}
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       {{- if .Values.spread.enabled }}
@@ -91,6 +98,9 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- with $int.qbittorrent.url }}
+            {{- if not (and $storage.downloads $storage.library) }}
+            {{- fail "integrations.qbittorrent.url needs storage.downloads and storage.library" }}
+            {{- end }}
             - name: QBITTORRENT_URL
               value: {{ . | quote }}
             - name: QBITTORRENT_SAVE_PATH
