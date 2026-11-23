@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-router';
 
 import { meQuery } from './api/client';
+import { CatalogPage, validateCatalogSearch } from './routes/catalog';
 import { AppLayout } from './routes/layout';
 import { LoginPage } from './routes/login';
 import { RequestsPage } from './routes/requests';
@@ -42,7 +43,25 @@ const signedInRoute = createRoute({
 const searchRoute = createRoute({
   getParentRoute: () => signedInRoute,
   path: '/',
-  component: SearchPage,
+  // From the catalog's Find: the game's name, and the platform folder to request it into.
+  validateSearch: (s: Record<string, unknown>): { q?: string | undefined; platform?: string | undefined } => ({
+    q: typeof s.q === 'string' && s.q.length <= 200 ? s.q : undefined,
+    platform: typeof s.platform === 'string' && s.platform.length <= 200 ? s.platform : undefined,
+  }),
+  component: function Search() {
+    const { q, platform } = searchRoute.useSearch();
+    // Remount for a new search from the catalog, so the field and results follow it.
+    return <SearchPage key={`${q ?? ''}|${platform ?? ''}`} initialQuery={q} platform={platform} />;
+  },
+});
+
+const catalogRoute = createRoute({
+  getParentRoute: () => signedInRoute,
+  path: '/catalog',
+  validateSearch: validateCatalogSearch,
+  component: function Catalog() {
+    return <CatalogPage search={catalogRoute.useSearch()} />;
+  },
 });
 
 const requestsRoute = createRoute({
@@ -57,7 +76,7 @@ const loginRoute = createRoute({
   component: LoginPage,
 });
 
-const routeTree = rootRoute.addChildren([signedInRoute.addChildren([searchRoute, requestsRoute]), loginRoute]);
+const routeTree = rootRoute.addChildren([signedInRoute.addChildren([searchRoute, catalogRoute, requestsRoute]), loginRoute]);
 
 export function createAppRouter(queryClient: QueryClient) {
   return createRouter({ routeTree, context: { queryClient }, defaultPreload: 'intent' });

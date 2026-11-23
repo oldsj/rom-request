@@ -22,6 +22,10 @@ secrets:
   env:
     - name: OIDC_CLIENT_SECRET
       key: oidc-client-secret
+    - name: IGDB_CLIENT_ID
+      key: igdb-client-id
+    - name: IGDB_CLIENT_SECRET
+      key: igdb-client-secret
     - name: PROWLARR_API_KEY
       key: prowlarr-api-key
     - name: QBITTORRENT_USERNAME
@@ -29,6 +33,8 @@ secrets:
     - name: QBITTORRENT_PASSWORD
       key: qbittorrent-password
 integrations:
+  catalog:
+    platforms: md=genesis-slash-megadrive
   prowlarr:
     url: http://prowlarr.media.svc:9696
     categories: "1000"
@@ -81,6 +87,14 @@ networkPolicy:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: envoy-gateway-system
+      ports:
+        - port: 443
+          protocol: TCP
+    # IGDB and Twitch, on the internet: anything public on 443.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
       ports:
         - port: 443
           protocol: TCP

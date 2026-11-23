@@ -19,6 +19,8 @@ tags:
     description: Sign up, sign in and out
   - name: requests
     description: Search releases, request them and follow them into the ROM library
+  - name: catalog
+    description: Browse every game on a platform (IGDB) and find releases for it
 
 paths:
   /auth/signup:
@@ -254,6 +256,134 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /catalog/platforms:
+    get:
+      operationId: listCatalogPlatforms
+      summary: The library's platforms, matched to the game catalog (IGDB)
+      tags: [catalog]
+      responses:
+        '200':
+          description: Every platform folder; those IGDB knows carry its name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CatalogPlatform'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /catalog/games:
+    get:
+      operationId: listCatalogGames
+      summary: Every game on a platform, from IGDB, marked when the library has it
+      description: |
+        "In the library" is a match of the game's name against the names in the platform's
+        folder, ignoring case, punctuation, a leading "The" and tags in brackets such as
+        "(USA)". It can miss a game filed under another name.
+      tags: [catalog]
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          description: The library folder
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: q
+          in: query
+          description: Search by name; ranks by relevance instead of `sort`
+          schema:
+            type: string
+            maxLength: 100
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [popular, name]
+            default: popular
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+            default: 0
+      responses:
+        '200':
+          description: One page of games
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CatalogGame'
+                  nextOffset:
+                    type: integer
+                    description: Pass as `offset` for the next page; absent on the last
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /catalog/covers/{coverId}:
+    get:
+      operationId: getCatalogCover
+      summary: A game's cover art, fetched from IGDB by the server
+      description: Served from here so the CSP stays same-origin and browsers don't contact IGDB.
+      tags: [catalog]
+      parameters:
+        - name: coverId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9]{1,40}$'
+      responses:
+        '200':
+          description: The cover, 264×374
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
   /search:
     get:
       operationId: search
@@ -467,8 +597,11 @@ components:
 
     Status:
       type: object
-      required: [prowlarr, qbittorrent, library]
+      required: [prowlarr, qbittorrent, library, catalog]
       properties:
+        catalog:
+          type: boolean
+          description: The game catalog (IGDB) is configured
         prowlarr:
           type: boolean
           description: Search is configured
@@ -486,6 +619,39 @@ components:
         name:
           type: string
           description: The library folder, e.g. GBA
+
+    CatalogPlatform:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The library folder
+        catalogName:
+          type: string
+          description: IGDB's name for the platform; absent when IGDB doesn't know the folder
+
+    CatalogGame:
+      type: object
+      required: [id, name, inLibrary]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: IGDB's id
+        name:
+          type: string
+        year:
+          type: integer
+          description: Year of first release
+        summary:
+          type: string
+        coverId:
+          type: string
+          description: For /catalog/covers/{coverId}
+        inLibrary:
+          type: boolean
+          description: A name in the platform folder matches
 
     Release:
       type: object

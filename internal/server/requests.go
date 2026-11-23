@@ -77,6 +77,7 @@ func (s *Server) GetStatus(ctx context.Context, _ api.GetStatusRequestObject) (a
 	}
 	return api.GetStatus200JSONResponse{
 		Prowlarr: s.search != nil, Qbittorrent: s.reqs != nil, Library: s.lib != nil,
+		Catalog: s.catalog != nil && s.lib != nil,
 	}, nil
 }
 

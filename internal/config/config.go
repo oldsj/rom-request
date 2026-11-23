@@ -93,12 +93,23 @@ type Config struct {
 	// LibraryExclude are top-level library folders that aren't platforms. Folders starting
 	// with ".", "#" or "@" are always skipped.
 	LibraryExclude []string `env:"LIBRARY_EXCLUDE" envSeparator:"," envDefault:"bios"`
+	// IGDBClientID and IGDBClientSecret are a Twitch application's credentials (the same ones
+	// RomM uses), for the game catalog. Optional; the secret is secret.
+	IGDBClientID     string `env:"IGDB_CLIENT_ID"`
+	IGDBClientSecret string `env:"IGDB_CLIENT_SECRET"`
+	// CatalogPlatforms maps library folders to IGDB platform slugs where the names differ and
+	// the built-in aliases don't cover it, e.g. "megadrive=genesis-slash-megadrive".
+	CatalogPlatforms map[string]string `env:"CATALOG_PLATFORMS" envSeparator:"," envKeyValSeparator:"="`
+
 	// WorkerInterval is how often active requests are checked against qBittorrent.
 	WorkerInterval time.Duration `env:"WORKER_INTERVAL" envDefault:"15s"`
 }
 
 // OIDCEnabled reports whether OIDC sign-in is configured.
 func (c Config) OIDCEnabled() bool { return c.OIDCIssuer != "" }
+
+// CatalogEnabled reports whether the IGDB catalog is configured.
+func (c Config) CatalogEnabled() bool { return c.IGDBClientID != "" }
 
 // SearchEnabled reports whether Prowlarr is configured.
 func (c Config) SearchEnabled() bool { return c.ProwlarrURL != "" }
@@ -150,6 +161,12 @@ func (c Config) validateIntegrations() []error {
 	}
 	if c.ProwlarrURL != "" && c.ProwlarrAPIKey == "" {
 		errs = append(errs, errors.New("PROWLARR_API_KEY is required with PROWLARR_URL"))
+	}
+	if (c.IGDBClientID == "") != (c.IGDBClientSecret == "") {
+		errs = append(errs, errors.New("IGDB_CLIENT_ID and IGDB_CLIENT_SECRET go together"))
+	}
+	if c.IGDBClientID != "" && c.LibraryDir == "" {
+		errs = append(errs, errors.New("IGDB_CLIENT_ID needs LIBRARY_DIR: the catalog browses the library's platforms"))
 	}
 	if (c.QBittorrentUsername == "") != (c.QBittorrentPassword == "") {
 		errs = append(errs, errors.New("QBITTORRENT_USERNAME and QBITTORRENT_PASSWORD go together"))

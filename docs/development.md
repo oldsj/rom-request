@@ -40,6 +40,8 @@ Environment only. Secrets have no defaults.
 | `PROWLARR_CATEGORIES` | all | Comma-separated Newznab ids, e.g. `1000` (Console) |
 | `QBITTORRENT_URL` | | Enables downloads (with the library and both paths below) |
 | `QBITTORRENT_USERNAME`, `QBITTORRENT_PASSWORD` | | Omit both if qBittorrent bypasses auth for this client |
+| `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` | | The game catalog: a Twitch application's credentials (the ones RomM uses). Needs `LIBRARY_DIR` |
+| `CATALOG_PLATFORMS` | | `folder=igdb-slug` pairs for library folders IGDB knows by another name, e.g. `md=genesis-slash-megadrive` |
 | `QBITTORRENT_CATEGORY` | | An existing category for ROM Request's torrents |
 | `QBITTORRENT_SAVE_PATH` | | Absolute, as qBittorrent sees it; each request downloads to `<this>/<request id>` |
 | `DOWNLOAD_DIR` | | The same folder as ROM Request sees it; read-only is enough |

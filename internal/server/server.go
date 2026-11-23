@@ -19,6 +19,7 @@ import (
 	"github.com/oldsj/rom-request/internal/config"
 	"github.com/oldsj/rom-request/internal/db/dbq"
 	"github.com/oldsj/rom-request/internal/httpx"
+	"github.com/oldsj/rom-request/internal/igdb"
 	"github.com/oldsj/rom-request/internal/library"
 	"github.com/oldsj/rom-request/internal/oidc"
 	"github.com/oldsj/rom-request/internal/prowlarr"
@@ -39,10 +40,11 @@ type Server struct {
 	draining atomic.Bool
 
 	// Integrations; nil when not configured.
-	search *prowlarr.Client
-	lib    *library.Library
-	reqs   *requests.Service
-	oidc   *oidc.Client
+	search  *prowlarr.Client
+	lib     *library.Library
+	reqs    *requests.Service
+	oidc    *oidc.Client
+	catalog *igdb.Client
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -72,6 +74,9 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 		s.reqs = requests.New(s.q, qb, s.lib, hc, requests.Config{
 			SavePath: cfg.QBittorrentSavePath, DownloadDir: cfg.DownloadDir, Category: cfg.QBittorrentCategory,
 		}, log)
+	}
+	if cfg.CatalogEnabled() {
+		s.catalog = igdb.New(igdb.Config{ClientID: cfg.IGDBClientID, ClientSecret: cfg.IGDBClientSecret}, hc)
 	}
 	if cfg.OIDCEnabled() {
 		s.oidc = oidc.New(oidc.Config{

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -51,6 +52,24 @@ func (e RequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListCatalogGamesParamsSort.
+const (
+	Name    ListCatalogGamesParamsSort = "name"
+	Popular ListCatalogGamesParamsSort = "popular"
+)
+
+// Valid indicates whether the value is a known member of the ListCatalogGamesParamsSort enum.
+func (e ListCatalogGamesParamsSort) Valid() bool {
+	switch e {
+	case Name:
+		return true
+	case Popular:
+		return true
+	default:
+		return false
+	}
+}
+
 // AuthMethods defines model for AuthMethods.
 type AuthMethods struct {
 	// Oidc Sign-in through the OIDC provider
@@ -64,6 +83,32 @@ type AuthMethods struct {
 
 	// Signup Anyone may create a password account
 	Signup bool `json:"signup"`
+}
+
+// CatalogGame defines model for CatalogGame.
+type CatalogGame struct {
+	// CoverId For /catalog/covers/{coverId}
+	CoverId *string `json:"coverId,omitempty"`
+
+	// Id IGDB's id
+	Id int64 `json:"id"`
+
+	// InLibrary A name in the platform folder matches
+	InLibrary bool    `json:"inLibrary"`
+	Name      string  `json:"name"`
+	Summary   *string `json:"summary,omitempty"`
+
+	// Year Year of first release
+	Year *int `json:"year,omitempty"`
+}
+
+// CatalogPlatform defines model for CatalogPlatform.
+type CatalogPlatform struct {
+	// CatalogName IGDB's name for the platform; absent when IGDB doesn't know the folder
+	CatalogName *string `json:"catalogName,omitempty"`
+
+	// Name The library folder
+	Name string `json:"name"`
 }
 
 // Credentials defines model for Credentials.
@@ -156,6 +201,9 @@ type RequestStatus string
 
 // Status defines model for Status.
 type Status struct {
+	// Catalog The game catalog (IGDB) is configured
+	Catalog bool `json:"catalog"`
+
 	// Library The ROM library and download folders are configured
 	Library bool `json:"library"`
 
@@ -210,6 +258,20 @@ type OidcCallbackParams struct {
 	UnderscoreUnderscoreHostOidc *string `form:"__Host-oidc,omitempty" json:"__Host-oidc,omitempty"`
 }
 
+// ListCatalogGamesParams defines parameters for ListCatalogGames.
+type ListCatalogGamesParams struct {
+	// Platform The library folder
+	Platform string `form:"platform" json:"platform"`
+
+	// Q Search by name; ranks by relevance instead of `sort`
+	Q      *string                     `form:"q,omitempty" json:"q,omitempty"`
+	Sort   *ListCatalogGamesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+	Offset *int                        `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListCatalogGamesParamsSort defines parameters for ListCatalogGames.
+type ListCatalogGamesParamsSort string
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q string `form:"q" json:"q"`
@@ -247,6 +309,15 @@ type ServerInterface interface {
 	// Signup Create an account and sign in
 	// (POST /auth/signup)
 	Signup(w http.ResponseWriter, r *http.Request)
+	// GetCatalogCover A game's cover art, fetched from IGDB by the server
+	// (GET /catalog/covers/{coverId})
+	GetCatalogCover(w http.ResponseWriter, r *http.Request, coverId string)
+	// ListCatalogGames Every game on a platform, from IGDB, marked when the library has it
+	// (GET /catalog/games)
+	ListCatalogGames(w http.ResponseWriter, r *http.Request, params ListCatalogGamesParams)
+	// ListCatalogPlatforms The library's platforms, matched to the game catalog (IGDB)
+	// (GET /catalog/platforms)
+	ListCatalogPlatforms(w http.ResponseWriter, r *http.Request)
 	// ListPlatforms Platform folders in the ROM library
 	// (GET /platforms)
 	ListPlatforms(w http.ResponseWriter, r *http.Request)
@@ -454,6 +525,118 @@ func (siw *ServerInterfaceWrapper) Signup(w http.ResponseWriter, r *http.Request
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Signup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCatalogCover operation middleware
+func (siw *ServerInterfaceWrapper) GetCatalogCover(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "coverId" -------------
+	var coverId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "coverId", r.PathValue("coverId"), &coverId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "coverId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCatalogCover(w, r, coverId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListCatalogGames operation middleware
+func (siw *ServerInterfaceWrapper) ListCatalogGames(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListCatalogGamesParams
+
+	// ------------- Required query parameter "platform" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "platform", r.URL.Query(), &params.Platform, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "platform"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "platform", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "offset"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCatalogGames(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListCatalogPlatforms operation middleware
+func (siw *ServerInterfaceWrapper) ListCatalogPlatforms(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCatalogPlatforms(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -733,6 +916,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/auth/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/status", wrapper.GetStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/platforms", wrapper.ListPlatforms)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/platforms", wrapper.ListCatalogPlatforms)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/games", wrapper.ListCatalogGames)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/catalog/covers/{coverId}", wrapper.GetCatalogCover)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/search", wrapper.Search)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/requests", wrapper.ListRequests)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/requests", wrapper.CreateRequest)
@@ -1210,6 +1396,295 @@ type SignupdefaultJSONResponse struct {
 }
 
 func (response SignupdefaultJSONResponse) VisitSignupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogCoverRequestObject struct {
+	CoverId string `json:"coverId"`
+}
+
+type GetCatalogCoverResponseObject interface {
+	VisitGetCatalogCoverResponse(w http.ResponseWriter) error
+}
+
+type GetCatalogCover200ResponseHeaders struct {
+	CacheControl string
+}
+
+type GetCatalogCover200ImagejpegResponse struct {
+	Body          io.Reader
+	Headers       GetCatalogCover200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetCatalogCover200ImagejpegResponse) VisitGetCatalogCoverResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetCatalogCover401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCatalogCover401JSONResponse) VisitGetCatalogCoverResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogCover502JSONResponse struct{ BadGatewayJSONResponse }
+
+func (response GetCatalogCover502JSONResponse) VisitGetCatalogCoverResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogCover503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetCatalogCover503JSONResponse) VisitGetCatalogCoverResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCatalogCoverdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetCatalogCoverdefaultJSONResponse) VisitGetCatalogCoverResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGamesRequestObject struct {
+	Params ListCatalogGamesParams
+}
+
+type ListCatalogGamesResponseObject interface {
+	VisitListCatalogGamesResponse(w http.ResponseWriter) error
+}
+
+type ListCatalogGames200JSONResponse struct {
+	Items []CatalogGame `json:"items"`
+
+	// NextOffset Pass as `offset` for the next page; absent on the last
+	NextOffset *int `json:"nextOffset,omitempty"`
+}
+
+func (response ListCatalogGames200JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGames400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListCatalogGames400JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGames401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListCatalogGames401JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGames404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListCatalogGames404JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGames502JSONResponse struct{ BadGatewayJSONResponse }
+
+func (response ListCatalogGames502JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGames503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ListCatalogGames503JSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogGamesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListCatalogGamesdefaultJSONResponse) VisitListCatalogGamesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogPlatformsRequestObject struct {
+}
+
+type ListCatalogPlatformsResponseObject interface {
+	VisitListCatalogPlatformsResponse(w http.ResponseWriter) error
+}
+
+type ListCatalogPlatforms200JSONResponse struct {
+	Items []CatalogPlatform `json:"items"`
+}
+
+func (response ListCatalogPlatforms200JSONResponse) VisitListCatalogPlatformsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogPlatforms401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListCatalogPlatforms401JSONResponse) VisitListCatalogPlatformsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogPlatforms502JSONResponse struct{ BadGatewayJSONResponse }
+
+func (response ListCatalogPlatforms502JSONResponse) VisitListCatalogPlatformsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogPlatforms503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ListCatalogPlatforms503JSONResponse) VisitListCatalogPlatformsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCatalogPlatformsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListCatalogPlatformsdefaultJSONResponse) VisitListCatalogPlatformsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1794,6 +2269,15 @@ type StrictServerInterface interface {
 	// Signup Create an account and sign in
 	// (POST /auth/signup)
 	Signup(ctx context.Context, request SignupRequestObject) (SignupResponseObject, error)
+	// GetCatalogCover A game's cover art, fetched from IGDB by the server
+	// (GET /catalog/covers/{coverId})
+	GetCatalogCover(ctx context.Context, request GetCatalogCoverRequestObject) (GetCatalogCoverResponseObject, error)
+	// ListCatalogGames Every game on a platform, from IGDB, marked when the library has it
+	// (GET /catalog/games)
+	ListCatalogGames(ctx context.Context, request ListCatalogGamesRequestObject) (ListCatalogGamesResponseObject, error)
+	// ListCatalogPlatforms The library's platforms, matched to the game catalog (IGDB)
+	// (GET /catalog/platforms)
+	ListCatalogPlatforms(ctx context.Context, request ListCatalogPlatformsRequestObject) (ListCatalogPlatformsResponseObject, error)
 	// ListPlatforms Platform folders in the ROM library
 	// (GET /platforms)
 	ListPlatforms(ctx context.Context, request ListPlatformsRequestObject) (ListPlatformsResponseObject, error)
@@ -2040,6 +2524,82 @@ func (sh *strictHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetCatalogCover operation middleware
+func (sh *strictHandler) GetCatalogCover(w http.ResponseWriter, r *http.Request, coverId string) {
+	var request GetCatalogCoverRequestObject
+
+	request.CoverId = coverId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCatalogCover(ctx, request.(GetCatalogCoverRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCatalogCover")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCatalogCoverResponseObject); ok {
+		if err := validResponse.VisitGetCatalogCoverResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListCatalogGames operation middleware
+func (sh *strictHandler) ListCatalogGames(w http.ResponseWriter, r *http.Request, params ListCatalogGamesParams) {
+	var request ListCatalogGamesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListCatalogGames(ctx, request.(ListCatalogGamesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListCatalogGames")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListCatalogGamesResponseObject); ok {
+		if err := validResponse.VisitListCatalogGamesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListCatalogPlatforms operation middleware
+func (sh *strictHandler) ListCatalogPlatforms(w http.ResponseWriter, r *http.Request) {
+	var request ListCatalogPlatformsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListCatalogPlatforms(ctx, request.(ListCatalogPlatformsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListCatalogPlatforms")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListCatalogPlatformsResponseObject); ok {
+		if err := validResponse.VisitListCatalogPlatformsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListPlatforms operation middleware
 func (sh *strictHandler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
 	var request ListPlatformsRequestObject
@@ -2226,66 +2786,78 @@ func (sh *strictHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"3Fv/U9u6sv9XdvzuDDDPJCmlZ+5N58wZSk8pc2nhkXb6Q8MDxd7EutiSK8mkuWf439+sJDsOURJoKe19",
-	"P2HH+rJa7dfPLn9FiSxKKVAYHfX/ijJkKSr7OEAzQK25FPSWok4UL419pW8apIIkR6Y0mAzh8vKt1GZX",
-	"uymQSHnNMYojnWRYMFrCzEqM+pE2iotJdHt7G0cKdSmFRrvhK5YeMYNTNqO3RAqDwtAjK8ucJ4z27v5L",
-	"O3rmy/5N4TjqR//VnZ+k677q7p9KSeW2WjzAgQAuDE6UXRW2z5Sc5kypGL684sZIpVCYHRgznmNKJ1U4",
-	"rjSm9qgJy/PoNiaCz/FLhdr8eII/ZAjKbQapRA1CGiiYSTJHkhRGscQQWYdSjHOePAFRB7lCls4Av3Jt",
-	"dEx8IrK4AAbaMINgMmaA5bmckpRwTfS55X44cR8Ffi0xMZgCujFx9EaqEU9TFD9++/fSHxzTGLhI8irl",
-	"YgJMzCBRUutdqfiEC6iEZuPmbonI99K8kZVIn4JG0FWSgUItK5UgjKWy1wSVRsuwc0y5QidLi3ObL3Hb",
-	"aJxIRyE905G4wjTqG1XhOksQk0HZPXQmY2mnA6iNilSg+UTs8tq+xDDNUIAUCFyDRrPe4NzG0Qcp3zEx",
-	"83qrfzyPz0kNcl5wg+lLUGjUDNjYoLJ6e07vuwf23bGRuP5RsMpkUvF/Y/o0kkpsxRS4sEo8VVJMIFGY",
-	"ojCc5doTdcN4zkY5Po25axtoK5QCMdXAtdgyZPDGfFIpss7CslKjuiH23dYiYC/3oDLZOzSZTO1rqWSJ",
-	"ynDncSRPk4Bz8yJmMiWribOvp8evD6FU8obTFcW1aI2kzJEJYg+t9Z4VAfmls9RTtzQIVtSKho04jypj",
-	"pIjiuzIbRyXTeipVurzunwXjOTCRQj2mXi5IIH2ryoB6iRnpT8HIMCFJK5svyJJEVsIEFryNWwr+eU5m",
-	"s5FjSXTRTJWjf6H3UC3JIvlJU07EsPysdT1jlmuM79wY0pnpYSxVwUzU97/EUcG+nqCYmCzq773Y38DI",
-	"1uBne3+Po4KL+XscsE/to9Y7NguGjtg4uTv01z9v1IrXaGibpc3tAit39LOW9k1kGpDMgSFtjqFgScYF",
-	"7pI3d79owa7xMmEaozjCr6woc1rocySkuRxb73QR4HGBWrNJaCfycUaCzuSU/pLsk495CQJvUNn4hXGh",
-	"rdIrQYKx6RrskeZbhlhyljNDgrLMD7FSU3M+UkzNYCzzFFUM2Jl04OjVwUZ67JIhKs4xR2Lk8qUwgxOp",
-	"/Bs3WOiA22pWZEqxGb3zgDE4Y1oTY50Ke/cGU24yisYEZLJSUTxXm6riacjccJHiV1RBOrgYy48qD/PN",
-	"T9zSULLJ3MApd/iXgEVpZs5dmwyVddhCCgwRkSMmmY8o/EfrDJx3LKtRznWG6YFZsAQpM7hreBFcUiOm",
-	"K1fU/N/4amZQL6zHhfltP4oD4w03zgmulwjHYTt2ztj2bnOWxm1hCAtRk2jcESJ74Q/ixcONUC1zm8Wn",
-	"KKV6IDn1nDc8xxUXVA85YyZbFr8Tp7K7CnNm+A1CyUwWgxQJQj1z3caDjO29+C1gtN4e7O69+A3k2Ipy",
-	"PRzGnEwkSTgDzcUkx136CSZsxQHvp1PLasATFBpDnr/RpUpcCzkNRw4t67f8UcmJQr0o8eNcMuN8KS+q",
-	"Iuo/s67RPfeaLURVjL5NcVyaseq82jBT6U2C6TVh4Aav0cY4qsr0YbrxPQrcsHt+ce0DN8dr8T5uaW+b",
-	"2jUG4FiUlXlg0LRSjj7MDfSWBj+MEoASVcFdzkVUY4HCxMA0NLa3Nuh83BLBdgzW620QybtJ3qLjhbGS",
-	"BeRcm9qJ68UNnvV6i3FbYDt/tuP72a4F4VxmlL0qSQ5OqoYP9Op3sX5viQk9ihONQUXL/O92Zkyp/+h3",
-	"u8Ph4L93/vjbRhGcH6HFvTXyMWh0CAVp7efoS4WVtX+pnIpcMoIhotr4tZ/tIId4BYO7+dJ3xcteXJhr",
-	"56fvmpulVKUmwl+zBqawlcwFM5fSg3MhHJKpJKNQYsMSX0YNqre8ymtP0z2IuZv11JQt7hA3PAnd1EeN",
-	"ocygzmyWXcR9xDdkudySyyTYcCipFDezARlVR4Ceg72cuNIguC5WjhYB3jkFrOT/xJlL4skahuVgytUc",
-	"pewA/XQkfc4OtJK24pExkeYkFjYPGLMEYbtOCbqs5Dt2lMlwKD7MShzYXSDJOQoD21McdbVKaKB3F50J",
-	"io7RO/ZmJyhQMevBybhYTIEcdx+SjIkJAjdDMeZKm5i2EKAqAVcFu7ZTrzpDMRSEJ6AwHu4gyWP+FLua",
-	"p9hAVdyBEleLXLvyuBVsvzWmPBX5LIYBXQXGQzFgBQ64wd9P2NedDhxalFBzg84G71oiCUP0WKET1xqY",
-	"Hs3gSG7pobgiG9Oxs08txHimpMGEyL2KQbvcy3NMo0g1CAmHg/M3YOQ1is5QNE6vH5H61snEwdlxFEc3",
-	"qJyYRL3Os07PQh8lClbyqB89tz9Zk5dZoeoSkNXN5YRbwSqlDujffu85XNXZ9KUdfJlyTZloetWkDLWw",
-	"qEpom9jA2cFg8On0/PXlyenR8fvfre/rRJYeBxuR4Y9O7OZOPVCbVzJ9vPpCG8i4XdRBoyq8W+HY6/Ue",
-	"bWtrRQLI2aBG8haB2UWANbSwH9xt1X3s8vu93qopzeG6rVKInfJs85QFkNNOer550hzApxl7/9g84y7g",
-	"axk2ZlVuNs+t4cm5vYz6ny/iSFdFYT2e5bbjtWETC5DQoaILmtPIvqxMW/iXxJO+L0nKfhiYxBRkZWCb",
-	"5Vq2s+kps3rs7czO413+Qy/lsZlLpyWbj87uQ8v/rOC4Q3YmGGD2EZp3GP0ErfzgsV5MCe2tqyvfpCff",
-	"wuCGpQE61jGywc1XcbMNr/9Atra3WcNdOpMn2lceFYJ8bLF8K6cudvAOKUejoURZ5o6K9faAQPEuVZBH",
-	"LLlusXbxRJ+sUptW5cD7avpppORUowJaoQOngop4CWodU6CgjAtJXBhCmqN8pU4PhZFw1b16CZKMxpRr",
-	"nH8E+8063z8sQPT7sOr1nieJTNE+4ZULDRZl4JSnyWF9GnL8ihVorN357APJLxWq2TyO9Ljt/OIXEqb9",
-	"vwdC2/BCNipatdKzvfBCS30MFDgt8NkaVW4g5SkVmuyN1nC1u9oQMZZlK4/14rd7n8oudNkm8zF4xbV+",
-	"8DordWxLu4g0Bu3415Ls3Edb61IIGvige7u4Y1qe9/Y2K3JToP41IoU3XHCdWRZSDL+pvrjOejThdNB0",
-	"HDT2QbAbPrGqGtu+DCYohrftK/1FxV9QgO3a39ipYA2AGOdy6qPufx7+uRO7Z0YFHWV2c36DaZ3bjLiw",
-	"rQ7t+qbdg+uatA58ylAMhT32ckFXLRKUMBowImPFkgzTeIH4odhgtoALbZClq8zXPEH4DxexAVn/75Ww",
-	"eZk4nKxR0romJzs4OTn9dDk4Pnr/8ex3yoGCBWqQou2E9nvPl/O2QV1G/iUSt2dPlbhVpeWY/iXSuAdn",
-	"ZL17KEHTn/ZraM2hb3oQdbNDw/+VgVzZQNKrjHCrkrxFRqrczfEG8xr1pL4lnmRwLot3ULCShgCnMLJe",
-	"OYBj3MHCvyvYXsQem9Jz87BOgGsilkvTd0FIu1oAf1yS/eZcMYUTNlr41vToxX2Ett3L9L0pVU17g2h7",
-	"6K+FfLekqMbuvCSpVh9aMMeiW28E/ydeesssPNKdt9X5V0iEbSXHkRSDwClqAxYMDt9evMI/Dpo0zVcD",
-	"SLVbTcUO+/YLEX5skeaxdK2iUAnDc2sKCJm2EO9QJLLk1hnUoZoXuS1dS5gXvg7s9/bb3tmWRxTqKjeQ",
-	"MQ34taSbejkU+71/zAfWpBKc7Xt6PYUYDJsO210mP8hFLxQ8n9hHN9K+UmxrzPKpsNH9zZOavuFvccQv",
-	"7hPvtjr0f4alrQsRrCm52joO83Jet2S0CvEbrG73L/90nN46Tc7RBDuQa321qFLGtEtIUMybQqgGyUSC",
-	"eY5p3ypwrVTtsiembb1WWMibuhzVshExMOPaV6SC7WlGzSWtz7RXJWwyRHzdqSGMqVTXqIYiZ4ZMwUGL",
-	"Ok+/tXEJBeJcg9/9pZ3brtHS+12Ch4IphBzH1NUuBXbAGRAirSklh0zFa8vTtqnYBHOfO7p+YWX5Timm",
-	"41khrnkSdi8BKI3qanM4pRHeKF7TbL+pcHyxSiO6tlmdlngyUlY6VWofdV3zJVOUtllhfwklT6415UxW",
-	"haaknW1FqZ1ZxrQT2ErkqLX/v57lGNu246+U1d5T+Jf/se0awCaMi/+vKvCBDI2/hMa0uhOvtNnOxq9M",
-	"uM5tjONK4jnXZI10XeZHcLdsm3d8G5d2kFjd85RkmFzrDvzJmniJxqZDwTXcsJynzrm4RlrnaWxDkP2f",
-	"nvoMIfvnWlTuB41/Was9d7urWs1Pe5sx06dNFqx7fsRk4YNXaHc1OoZCagO2qTf1UfoThmP/CcGSb42q",
-	"/7HRSqxpuGjvR6/RtqbXK6hthx6sdQixtH0spE4+JuE5N7M+sDaoS0ghT5CCJNCG5zmMXJThsZChmCuq",
-	"+48fZixUrakYo7CUyuiQgh1h3fT2Aw223yEgmcet/1LyXPspCe0nCyi1/mdKtwFayv0WG9sC974IkrU6",
-	"wj5fkDlxSznrVak86kfUaBXdXjSrhRoWoCrjGk2z0aXrdvAWjxgQhepyPnF1chq34m8s7CouYXbvTV68",
-	"CLkshiY6ur24/b8BAA==",
+	"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",
+	"LHX1OpLdj4u0pscqE28co0oPXp9f/2sA",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

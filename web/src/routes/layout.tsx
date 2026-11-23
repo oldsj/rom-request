@@ -25,6 +25,7 @@ export function AppLayout() {
         <p className="text-lg font-semibold">ROM Request</p>
         <nav aria-label="Main" className="flex items-center gap-4">
           <Link to="/" className={navLink} activeOptions={{ exact: true }}>Search</Link>
+          <Link to="/catalog" className={navLink}>Browse</Link>
           <Link to="/requests" className={navLink}>Requests</Link>
           <Button onClick={() => { logout.mutate({}); }} disabled={logout.isPending}>Sign out</Button>
         </nav>

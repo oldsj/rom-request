@@ -7,6 +7,7 @@ import { queryOptions } from '@tanstack/react-query';
 import type { components, paths } from './schema.gen';
 
 export type Release = components['schemas']['Release'];
+export type CatalogGame = components['schemas']['CatalogGame'];
 export type RomRequest = components['schemas']['Request'];
 export type RequestStatus = components['schemas']['RequestStatus'];
 export type User = components['schemas']['User'];

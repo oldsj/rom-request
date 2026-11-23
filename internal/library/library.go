@@ -71,6 +71,38 @@ func (l *Library) isPlatform(name string) bool {
 	return !slices.Contains(l.exclude, strings.ToLower(name))
 }
 
+// Games lists the names in a platform folder: ROM files, and folders of multi-file games.
+// Hidden names are skipped.
+func (l *Library) Games(platform string) ([]string, error) {
+	if !l.isPlatform(platform) {
+		return nil, ErrUnknownPlatform
+	}
+	root, err := os.OpenRoot(l.dir)
+	if err != nil {
+		return nil, fmt.Errorf("library: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	dir, err := root.Open(platform)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrUnknownPlatform
+	}
+	if err != nil {
+		return nil, fmt.Errorf("library: %w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("library: %w", err)
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if n := e.Name(); n != "" && n[0] != '.' {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
 // HasPlatform reports whether name is a platform folder.
 func (l *Library) HasPlatform(name string) (bool, error) {
 	if !l.isPlatform(name) {
