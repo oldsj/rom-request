@@ -349,6 +349,75 @@ paths:
         default:
           $ref: '#/components/responses/Error'
 
+  /catalog/requests:
+    get:
+      operationId: listCatalogRequests
+      summary: The signed-in user's requests for catalog games on a platform
+      description: The latest request for each game, for showing its state on the game's card.
+      tags: [catalog]
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          description: The library folder
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      responses:
+        '200':
+          description: One per game requested
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Request'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: requestCatalogGame
+      summary: Request a game from the catalog
+      description: |
+        Saves the request at once, as `searching`. The worker then searches Prowlarr for the
+        game on the platform, picks a release (the name and platform must match; then region
+        and seeders decide), and downloads and imports it as any request. A request that finds
+        nothing fails with `no_release`. 409 when the game already has a live request.
+      tags: [catalog]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CatalogRequestInput'
+      responses:
+        '201':
+          description: Requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
   /catalog/covers/{coverId}:
     get:
       operationId: getCatalogCover
@@ -706,9 +775,26 @@ components:
           pattern: '^(https?://\S+)?$'
           description: The creator's or publisher's release page
 
+    CatalogRequestInput:
+      type: object
+      additionalProperties: false
+      required: [platform, gameId]
+      properties:
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: A library folder IGDB knows (listCatalogPlatforms)
+        gameId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: IGDB's id, from listCatalogGames
+
     RequestStatus:
       type: string
-      enum: [queued, downloading, importing, imported, failed]
+      description: "`searching`: a catalog request looking for a release; then as any request."
+      enum: [searching, queued, downloading, importing, imported, failed]
 
     Request:
       type: object
@@ -759,6 +845,16 @@ components:
         importedAt:
           type: string
           format: date-time
+        gameId:
+          type: integer
+          format: int64
+          description: IGDB's id, for a request made from the catalog
+        gameName:
+          type: string
+          description: The catalog game's name, for a request made from the catalog
+        coverId:
+          type: string
+          description: The catalog game's cover, for /catalog/covers/{coverId}
 
     Error:
       type: object

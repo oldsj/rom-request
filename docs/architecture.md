@@ -21,10 +21,21 @@ sees their ids.
 ## Request lifecycle
 
 ```text
-queued ──▶ downloading ──▶ importing ──▶ imported
-   │            │              │
-   └────────────┴──────────────┴──▶ failed ──(retry)──▶ queued
+searching ──▶ queued ──▶ downloading ──▶ importing ──▶ imported
+    │             │             │              │
+    └─────────────┴─────────────┴──────────────┴──▶ failed ──(retry)──▶ queued (or searching)
 ```
+
+A request from Browse (`POST /api/catalog/requests`, a game id and a platform folder) starts as
+`searching`, with no release yet. The worker claims it (`ClaimSearch`, so one pod searches it),
+searches Prowlarr for the game's name and then its significant words, ranks the results
+(`internal/requests/pick.go`), reads the best few torrents and moves the request to `queued`
+with the first one no other request has. A search can take minutes with slow indexers, so it
+runs in the worker, not in the browser's request. No match fails the request with `no_release`;
+Prowlarr errors are retried every ten minutes, four times. Retrying a catalog request without a
+release searches again. One live catalog request per user, platform and game.
+
+Manual requests, from Search:
 
 1. **Search.** `GET /api/search` asks Prowlarr, keeps torrent results, stores them for the user,
    and returns them by seeders.

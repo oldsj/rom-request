@@ -22,6 +22,7 @@ export function formatDate(iso: string): string {
 }
 
 export const statusLabel: Record<RequestStatus, string> = {
+  searching: 'Finding a release',
   queued: 'Queued',
   downloading: 'Downloading',
   importing: 'Importing',
@@ -30,6 +31,7 @@ export const statusLabel: Record<RequestStatus, string> = {
 };
 
 export const statusTone: Record<RequestStatus, BadgeTone> = {
+  searching: 'active',
   queued: 'neutral',
   downloading: 'active',
   importing: 'active',
@@ -39,5 +41,5 @@ export const statusTone: Record<RequestStatus, BadgeTone> = {
 
 /** Whether a request will change without anyone acting on it (worth polling for). */
 export function isActive(status: RequestStatus): boolean {
-  return status === 'queued' || status === 'downloading' || status === 'importing';
+  return status === 'searching' || status === 'queued' || status === 'downloading' || status === 'importing';
 }

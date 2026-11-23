@@ -17,6 +17,43 @@ INSERT INTO requests (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
+-- name: CreateCatalogRequest :one
+-- A game from the catalog; the worker finds the release.
+INSERT INTO requests (
+    user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, platform,
+    game_id, game_name, cover_id, catalog_slug, catalog_name, status
+) VALUES (
+    sqlc.arg(user_id), sqlc.arg(game_name), '', 0, '', '', '', sqlc.arg(platform),
+    sqlc.arg(game_id), sqlc.arg(game_name), sqlc.arg(cover_id), sqlc.arg(catalog_slug),
+    sqlc.arg(catalog_name), 'searching'
+)
+RETURNING *;
+
+-- name: CatalogRequests :many
+-- The latest request for each catalog game on a platform.
+SELECT DISTINCT ON (game_id) * FROM requests
+WHERE user_id = $1 AND platform = $2 AND game_id IS NOT NULL
+ORDER BY game_id, created_at DESC
+LIMIT 2000;
+
+-- name: ClaimSearch :one
+-- Worker: take a searching request's search. A new one (no attempts) is free; one whose search
+-- started more than `stale` ago was left by a pod that died.
+UPDATE requests
+SET search_attempts = search_attempts + 1, updated_at = now(), step_started_at = now()
+WHERE id = sqlc.arg(id) AND status = 'searching'
+  AND (search_attempts = 0 OR step_started_at < now() - sqlc.arg(stale)::interval)
+RETURNING *;
+
+-- name: FoundRelease :one
+-- Worker: searching -> queued with the release it picked. The submit step takes it from there.
+UPDATE requests
+SET status = 'queued', title = $2, indexer = $3, size_bytes = $4, info_url = $5,
+    download_url = $6, magnet_url = $7, torrent_hash = $8, torrent_ids = $9,
+    submit_attempts = 0, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND status = 'searching'
+RETURNING *;
+
 -- name: RequestForTorrent :one
 -- Any live request for a torrent, whoever made it.
 SELECT id, user_id, status FROM requests
@@ -24,9 +61,12 @@ WHERE torrent_hash = $1 AND status <> 'failed'
 LIMIT 1;
 
 -- name: RetryRequest :one
--- Back to the queue from failed only; the worker or handler submits it again.
+-- Back to the queue from failed only; the worker or handler submits it again. A catalog
+-- request that never found a release searches again.
 UPDATE requests
-SET status = 'queued', error_code = '', error_message = '', progress = 0, submit_attempts = 0,
+SET status = CASE WHEN game_id IS NOT NULL AND torrent_hash = '' AND download_url = '' AND magnet_url = ''
+                  THEN 'searching'::request_status ELSE 'queued'::request_status END,
+    error_code = '', error_message = '', progress = 0, submit_attempts = 0, search_attempts = 0,
     updated_at = now(), step_started_at = now()
 WHERE id = $1 AND user_id = $2 AND status = 'failed'
 RETURNING *;
@@ -34,7 +74,7 @@ RETURNING *;
 -- name: ActiveRequests :many
 -- Worker.
 SELECT * FROM requests
-WHERE status IN ('queued', 'downloading', 'importing')
+WHERE status IN ('searching', 'queued', 'downloading', 'importing')
 ORDER BY created_at
 LIMIT 200;
 
@@ -97,12 +137,12 @@ SET status = 'failed', error_code = $3, error_message = $4, import_claim = NULL,
 WHERE id = $1 AND import_claim = $2 AND status = 'importing';
 
 -- name: MarkFailed :execrows
--- Worker and handler: a queued or downloading request -> failed, from the status the caller
--- saw, with a reason the user can act on.
+-- Worker and handler: a searching, queued or downloading request -> failed, from the status
+-- the caller saw, with a reason the user can act on.
 UPDATE requests
 SET status = 'failed', error_code = $2, error_message = $3, updated_at = now(),
     step_started_at = now()
-WHERE id = $1 AND status = $4 AND status IN ('queued', 'downloading');
+WHERE id = $1 AND status = $4 AND status IN ('searching', 'queued', 'downloading');
 
 -- name: RemoveRequest :one
 -- Handler: delete a request (not while importing: the worker owns that step) and, unless it

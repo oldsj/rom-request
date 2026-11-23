@@ -57,17 +57,21 @@ type Config struct {
 	SavePath    string
 	DownloadDir string
 	Category    string
+	// Categories limits catalog searches to these Newznab categories.
+	Categories []int
 }
 
 // Service runs requests against qBittorrent and the library.
 type Service struct {
-	q   *dbq.Queries
-	qb  *qbittorrent.Client
-	lib *library.Library
-	hc  *http.Client
-	cfg Config
-	log *slog.Logger
-	now func() time.Time
+	q  *dbq.Queries
+	qb *qbittorrent.Client
+	// search finds releases for catalog requests; nil without Prowlarr.
+	search Searcher
+	lib    *library.Library
+	hc     *http.Client
+	cfg    Config
+	log    *slog.Logger
+	now    func() time.Time
 }
 
 // SetClock replaces the clock the worker's waits are measured with (tests).
@@ -75,9 +79,10 @@ func (s *Service) SetClock(now func() time.Time) { s.now = now }
 
 func (s *Service) since(t time.Time) time.Duration { return s.now().Sub(t) }
 
-// New makes a Service. hc fetches .torrent files from Prowlarr.
-func New(q *dbq.Queries, qb *qbittorrent.Client, lib *library.Library, hc *http.Client, cfg Config, log *slog.Logger) *Service {
-	return &Service{q: q, qb: qb, lib: lib, hc: hc, cfg: cfg, log: log, now: time.Now}
+// New makes a Service. hc fetches .torrent files from Prowlarr; search (nil without Prowlarr)
+// finds the releases of catalog requests.
+func New(q *dbq.Queries, qb *qbittorrent.Client, search Searcher, lib *library.Library, hc *http.Client, cfg Config, log *slog.Logger) *Service {
+	return &Service{q: q, qb: qb, search: search, lib: lib, hc: hc, cfg: cfg, log: log, now: time.Now}
 }
 
 // Failure is a reason a request failed, safe to show.
@@ -277,8 +282,9 @@ func submitBackoff(attempts int32) time.Duration {
 	return min(queuedGrace<<min(attempts, 16), maxSubmitBackoff)
 }
 
-// Tick does one round: removes torrents of removed requests, submits queued requests, updates
-// downloads, and imports finished ones.
+// Tick does one round: removes torrents of removed requests, finds releases for catalog
+// requests (alongside the rest, and waited for), submits queued requests, updates downloads,
+// and imports finished ones.
 func (s *Service) Tick(ctx context.Context) error {
 	var errs []error
 	removals, err := s.q.TorrentRemovals(ctx)
@@ -296,6 +302,19 @@ func (s *Service) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var searching []dbq.Request
+	for _, r := range active {
+		if r.Status == dbq.RequestStatusSearching {
+			searching = append(searching, r)
+		}
+	}
+	searched := make(chan struct{})
+	go func() {
+		defer close(searched)
+		s.searchAll(ctx, searching)
+	}()
+	defer func() { <-searched }()
+
 	var downloading []dbq.Request
 	for _, r := range active {
 		if ctx.Err() != nil {
@@ -316,7 +335,7 @@ func (s *Service) Tick(ctx context.Context) error {
 			if s.since(r.StepStartedAt) > staleImport {
 				s.importRequest(ctx, r, "")
 			}
-		case dbq.RequestStatusImported, dbq.RequestStatusFailed:
+		case dbq.RequestStatusSearching, dbq.RequestStatusImported, dbq.RequestStatusFailed:
 		}
 	}
 	if err := s.followDownloads(ctx, downloading); err != nil {

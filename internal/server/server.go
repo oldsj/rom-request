@@ -52,6 +52,10 @@ var _ api.StrictServerInterface = (*Server)(nil)
 // integrationTimeout bounds each call to Prowlarr or qBittorrent.
 const integrationTimeout = 25 * time.Second
 
+// workerSearchTimeout bounds one Prowlarr search made by the worker: Prowlarr waits for its
+// slowest indexer.
+const workerSearchTimeout = 3 * time.Minute
+
 // New makes a Server with the integrations cfg configures. cfg has been validated.
 func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, error) {
 	s := &Server{cfg: cfg, log: log, pool: pool, q: dbq.New(pool)}
@@ -71,8 +75,18 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 		if err != nil {
 			return nil, err
 		}
-		s.reqs = requests.New(s.q, qb, s.lib, hc, requests.Config{
+		// Catalog requests search in the worker, where a slow indexer can take minutes.
+		var search requests.Searcher
+		if cfg.SearchEnabled() {
+			c, err := prowlarr.New(cfg.ProwlarrURL, cfg.ProwlarrAPIKey, &http.Client{Timeout: workerSearchTimeout})
+			if err != nil {
+				return nil, err
+			}
+			search = c
+		}
+		s.reqs = requests.New(s.q, qb, search, s.lib, hc, requests.Config{
 			SavePath: cfg.QBittorrentSavePath, DownloadDir: cfg.DownloadDir, Category: cfg.QBittorrentCategory,
+			Categories: cfg.ProwlarrCategories,
 		}, log)
 	}
 	if cfg.CatalogEnabled() {

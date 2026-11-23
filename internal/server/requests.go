@@ -67,6 +67,12 @@ func toRequest(r dbq.Request) api.Request {
 	if r.ImportedAt.Valid {
 		out.ImportedAt = &r.ImportedAt.Time
 	}
+	if r.GameID.Valid {
+		out.GameId, out.GameName = &r.GameID.Int64, &r.GameName
+		if r.CoverID != "" {
+			out.CoverId = &r.CoverID
+		}
+	}
 	return out
 }
 
@@ -257,7 +263,7 @@ func (s *Server) RetryRequest(ctx context.Context, req api.RetryRequestRequestOb
 	if err != nil {
 		return nil, err
 	}
-	if s.reqs != nil {
+	if s.reqs != nil && r.Status == dbq.RequestStatusQueued {
 		sctx, cancel := context.WithTimeout(ctx, resolveTimeout+submitTimeout)
 		defer cancel()
 		if submitted, err := s.reqs.Submit(sctx, r, nil); err != nil {

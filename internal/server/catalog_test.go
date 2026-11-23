@@ -72,6 +72,17 @@ func newFakeIGDB(t *testing.T) *fakeIGDB {
 			}
 			_, _ = io.WriteString(w, "["+strings.Join(out, ",")+"]")
 		case "games":
+			// One game by id: a catalog request's lookup.
+			if m := regexp.MustCompile(`where id = (\d+);`).FindStringSubmatch(q); m != nil {
+				for _, g := range gbaGames {
+					if strings.HasPrefix(g, `{"id":`+m[1]+`,`) {
+						_, _ = io.WriteString(w, "["+strings.Replace(g, "{", `{"platforms":[24],`, 1)+"]")
+						return
+					}
+				}
+				_, _ = io.WriteString(w, "[]")
+				return
+			}
 			f.last.Store(q)
 			if !strings.Contains(q, "where platforms = (24)") || !strings.Contains(q, "offset 0;") {
 				_, _ = io.WriteString(w, "[]")

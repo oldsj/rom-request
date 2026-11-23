@@ -219,6 +219,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/catalog/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in user's requests for catalog games on a platform
+         * @description The latest request for each game, for showing its state on the game's card.
+         */
+        get: operations["listCatalogRequests"];
+        put?: never;
+        /**
+         * Request a game from the catalog
+         * @description Saves the request at once, as `searching`. The worker then searches Prowlarr for the
+         *     game on the platform, picks a release (the name and platform must match; then region
+         *     and seeders decide), and downloads and imports it as any request. A request that finds
+         *     nothing fails with `no_release`. 409 when the game already has a live request.
+         */
+        post: operations["requestCatalogGame"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/catalog/covers/{coverId}": {
         parameters: {
             query?: never;
@@ -417,8 +444,20 @@ export interface components {
             /** @description The creator's or publisher's release page */
             sourceUrl?: string;
         };
-        /** @enum {string} */
-        RequestStatus: "queued" | "downloading" | "importing" | "imported" | "failed";
+        CatalogRequestInput: {
+            /** @description A library folder IGDB knows (listCatalogPlatforms) */
+            platform: string;
+            /**
+             * Format: int64
+             * @description IGDB's id, from listCatalogGames
+             */
+            gameId: number;
+        };
+        /**
+         * @description `searching`: a catalog request looking for a release; then as any request.
+         * @enum {string}
+         */
+        RequestStatus: "searching" | "queued" | "downloading" | "importing" | "imported" | "failed";
         Request: {
             /** Format: uuid */
             id: string;
@@ -446,6 +485,15 @@ export interface components {
             updatedAt: string;
             /** Format: date-time */
             importedAt?: string;
+            /**
+             * Format: int64
+             * @description IGDB's id, for a request made from the catalog
+             */
+            gameId?: number;
+            /** @description The catalog game's name, for a request made from the catalog */
+            gameName?: string;
+            /** @description The catalog game's cover, for /catalog/covers/{coverId} */
+            coverId?: string;
         };
         Error: {
             error: components["schemas"]["ErrorDetail"];
@@ -830,6 +878,64 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listCatalogRequests: {
+        parameters: {
+            query: {
+                /** @description The library folder */
+                platform: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One per game requested */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Request"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            default: components["responses"]["Error"];
+        };
+    };
+    requestCatalogGame: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogRequestInput"];
+            };
+        };
+        responses: {
+            /** @description Requested */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Request"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             502: components["responses"]["BadGateway"];
             503: components["responses"]["Unavailable"];
             default: components["responses"]["Error"];

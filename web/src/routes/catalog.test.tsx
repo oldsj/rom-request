@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const navigate = vi.fn();
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate, Link: () => null }));
 const { CatalogPage, validateCatalogSearch } = await import('./catalog');
 
 const answers: Record<string, unknown> = {
@@ -14,7 +14,15 @@ const answers: Record<string, unknown> = {
     items: [
       { id: 1, name: 'The Legend of Zelda: The Minish Cap', year: 2004, coverId: 'co1abc', inLibrary: true },
       { id: 2, name: 'Metroid Fusion', inLibrary: false },
+      { id: 3, name: 'Pokémon FireRed Version', inLibrary: false },
     ],
+  },
+  '/api/catalog/requests': {
+    items: [{
+      id: 'r1', gameId: 3, gameName: 'Pokémon FireRed Version', title: 'Pokémon FireRed Version', indexer: '', sizeBytes: 0,
+      infoUrl: '', platform: 'gba', license: '', sourceUrl: '', status: 'searching', progress: 0,
+      createdAt: '2026-11-23T00:00:00Z', updatedAt: '2026-11-23T00:00:00Z',
+    }],
   },
 };
 
@@ -33,7 +41,7 @@ afterEach(() => {
 });
 
 describe('CatalogPage', () => {
-  it('marks games in the library and finds the others', async () => {
+  it('marks games in the library and requested, and requests the others', async () => {
     const fetchMock = stubApi();
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -49,8 +57,13 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('option', { name: 'atari7800: not in IGDB' })).toBeDisabled();
     expect(screen.getByRole('list', { name: 'Games' }).querySelector('img')?.getAttribute('src')).toBe('/api/catalog/covers/co1abc');
 
-    await userEvent.click(screen.getByRole('button', { name: 'Find releases of Metroid Fusion' }));
-    expect(navigate).toHaveBeenCalledWith({ to: '/', search: { q: 'Metroid Fusion', platform: 'gba' } });
+    expect(screen.getByText('Finding a release…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Request Pokémon FireRed Version' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Request Metroid Fusion' }));
+    const post = fetchMock.mock.calls.map((c) => c[0] as Request).find((r) => r.method === 'POST');
+    expect(new URL(post?.url ?? '').pathname).toBe('/api/catalog/requests');
+    expect(await post?.json()).toEqual({ platform: 'gba', gameId: 2 });
   });
 });
 

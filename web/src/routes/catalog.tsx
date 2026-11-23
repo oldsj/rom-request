@@ -1,9 +1,11 @@
-import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from '@tanstack/react-router';
 import type { SubmitEvent } from 'react';
 
-import { Badge, Button, Input, Notice, Select } from '@app/design';
+import { Badge, Button, Input, Notice, Progress, Select } from '@app/design';
 
-import { $api, errorMessage, type CatalogGame } from '../api/client';
+import { $api, errorMessage, type CatalogGame, type RomRequest } from '../api/client';
+import { isActive } from '../format';
 import { field } from '../api/form';
 
 export interface CatalogSearch {
@@ -34,7 +36,7 @@ export function CatalogPage({ search }: { search: CatalogSearch }) {
     const d = new FormData(e.currentTarget);
     const q = field(d, 'q').trim();
     void navigate({
-      to: '/catalog',
+      to: '/',
       search: { platform: field(d, 'platform'), ...(q ? { q } : {}), ...(field(d, 'sort') === 'name' ? { sort: 'name' as const } : {}) },
     });
   }
@@ -43,12 +45,15 @@ export function CatalogPage({ search }: { search: CatalogSearch }) {
     <section>
       <h1 className="mb-2 text-2xl font-semibold">Browse games</h1>
       <p className="text-muted-foreground mb-6 text-sm">
-        Every game IGDB lists for a platform in your library. Find looks for releases of it in
-        Prowlarr.
+        Every game IGDB lists for a platform in your library. Request one and ROM Request finds a
+        release, downloads it and adds it to the library.
       </p>
 
       {status.data && !status.data.catalog && (
-        <Notice>The catalog isn't set up on this server yet: it needs IGDB credentials and the ROM library.</Notice>
+        <Notice>
+          The catalog isn't set up on this server yet: it needs IGDB credentials and the ROM
+          library. <Link to="/search" className="underline">Search for releases</Link> instead.
+        </Notice>
       )}
       {platforms.isError && <Notice tone="error">{errorMessage(platforms.error)}</Notice>}
       {platforms.data && browsable.length === 0 && (
@@ -98,6 +103,11 @@ function Games({ platform, q, sort }: { platform: string; q?: string | undefined
     },
   );
   const items = games.data?.pages.flatMap((p) => p.items) ?? [];
+  const requests = $api.useQuery('get', '/catalog/requests', { params: { query: { platform } } }, {
+    // Follow requests while any is still moving.
+    refetchInterval: (q) => (q.state.data?.items.some((r) => isActive(r.status)) ? 5000 : false),
+  });
+  const byGame = new Map((requests.data?.items ?? []).map((r) => [r.gameId, r]));
 
   if (games.isPending) return <Notice>Loading…</Notice>;
   // A failed first page; a failed later page shows under the list instead.
@@ -106,7 +116,7 @@ function Games({ platform, q, sort }: { platform: string; q?: string | undefined
   return (
     <>
       <ul aria-label="Games" className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {items.map((g) => <GameCard key={g.id} game={g} platform={platform} />)}
+        {items.map((g) => <GameCard key={g.id} game={g} platform={platform} request={byGame.get(g.id)} />)}
       </ul>
       {games.hasNextPage && (
         <div className="mt-6 flex justify-center">
@@ -120,8 +130,7 @@ function Games({ platform, q, sort }: { platform: string; q?: string | undefined
   );
 }
 
-function GameCard({ game, platform }: { game: CatalogGame; platform: string }) {
-  const navigate = useNavigate();
+function GameCard({ game, platform, request }: { game: CatalogGame; platform: string; request?: RomRequest | undefined }) {
   return (
     <li className="bg-surface border-border rounded-panel flex flex-col overflow-hidden border">
       {game.coverId ? (
@@ -140,19 +149,42 @@ function GameCard({ game, platform }: { game: CatalogGame; platform: string }) {
         <h2 className="text-sm leading-snug font-medium break-words" title={game.summary}>{game.name}</h2>
         {game.year !== undefined && <p className="text-muted-foreground text-xs">{game.year}</p>}
         <div className="mt-auto">
-          {game.inLibrary ? (
-            <Badge tone="success">In library</Badge>
-          ) : (
-            <Button
-              fullWidth
-              onClick={() => { void navigate({ to: '/', search: { q: game.name, platform } }); }}
-              aria-label={`Find releases of ${game.name}`}
-            >
-              Find
-            </Button>
-          )}
+          <RequestState game={game} platform={platform} request={request} />
         </div>
       </div>
     </li>
+  );
+}
+
+/** A game's state: in the library, its request's progress, or a button to request it. */
+function RequestState({ game, platform, request: r }: { game: CatalogGame; platform: string; request?: RomRequest | undefined }) {
+  const queryClient = useQueryClient();
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['get', '/catalog/requests'] });
+  const create = $api.useMutation('post', '/catalog/requests', { onSettled: refresh });
+  const retry = $api.useMutation('post', '/requests/{requestId}/retry', { onSettled: refresh });
+  const error = create.error ?? retry.error;
+
+  if (game.inLibrary || r?.status === 'imported') return <Badge tone="success">In library</Badge>;
+  if (r && r.status !== 'failed') {
+    if (r.status === 'downloading') return <Progress label="Downloading" value={r.progress} />;
+    return <Badge tone="active">{r.status === 'searching' ? 'Finding a release…' : r.status === 'importing' ? 'Adding to library…' : 'Queued'}</Badge>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {r?.error && <p className="text-muted-foreground text-xs" title={r.error.message}>{r.error.code === 'no_release' ? 'No release found.' : 'The request failed.'}</p>}
+      {error && <p role="alert" className="text-danger text-xs">{errorMessage(error)}</p>}
+      <Button
+        fullWidth
+        variant={r ? 'secondary' : 'primary'}
+        disabled={create.isPending || retry.isPending}
+        aria-label={`${r ? 'Retry' : 'Request'} ${game.name}`}
+        onClick={() => {
+          if (r) retry.mutate({ params: { path: { requestId: r.id } } });
+          else create.mutate({ body: { platform, gameId: game.id } });
+        }}
+      >
+        {r ? 'Retry' : 'Request'}
+      </Button>
+    </div>
   );
 }

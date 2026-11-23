@@ -13,6 +13,11 @@ ROM Request → Prowlarr → qBittorrent → ROM library → RomM
 
 ## What it does
 
+- **Browse** every game IGDB lists for each platform in your library (the home page), marked when
+  you have it, and **request** one with a click: the worker searches Prowlarr for the game, picks
+  a release (every word of the title, the right platform, no soundtracks, cracks or packs;
+  preferring the USA, then Europe, then more seeders), and downloads and imports it like any
+  other request.
 - **Search** the indexers configured in your [Prowlarr](https://prowlarr.com/), with torrent results
   sorted by seeders.
 - **Request** a release for a platform. The platforms are your library's top-level folders (`GBA`,

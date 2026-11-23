@@ -13,8 +13,8 @@ import (
 )
 
 const activeRequests = `-- name: ActiveRequests :many
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests
-WHERE status IN ('queued', 'downloading', 'importing')
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts FROM requests
+WHERE status IN ('searching', 'queued', 'downloading', 'importing')
 ORDER BY created_at
 LIMIT 200
 `
@@ -56,6 +56,78 @@ func (q *Queries) ActiveRequests(ctx context.Context) ([]Request, error) {
 			&i.TorrentIds,
 			&i.SubmitAttempts,
 			&i.ImportClaim,
+			&i.GameID,
+			&i.GameName,
+			&i.CoverID,
+			&i.CatalogSlug,
+			&i.CatalogName,
+			&i.SearchAttempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const catalogRequests = `-- name: CatalogRequests :many
+SELECT DISTINCT ON (game_id) id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts FROM requests
+WHERE user_id = $1 AND platform = $2 AND game_id IS NOT NULL
+ORDER BY game_id, created_at DESC
+LIMIT 2000
+`
+
+type CatalogRequestsParams struct {
+	UserID   uuid.UUID
+	Platform string
+}
+
+// The latest request for each catalog game on a platform.
+func (q *Queries) CatalogRequests(ctx context.Context, arg CatalogRequestsParams) ([]Request, error) {
+	rows, err := q.db.Query(ctx, catalogRequests, arg.UserID, arg.Platform)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Request{}
+	for rows.Next() {
+		var i Request
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Title,
+			&i.Indexer,
+			&i.SizeBytes,
+			&i.InfoUrl,
+			&i.DownloadUrl,
+			&i.MagnetUrl,
+			&i.TorrentHash,
+			&i.Platform,
+			&i.License,
+			&i.SourceUrl,
+			&i.Status,
+			&i.Progress,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.ImportedPath,
+			&i.ImportedFiles,
+			&i.ImportedSha256,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.StepStartedAt,
+			&i.ImportedAt,
+			&i.TorrentIds,
+			&i.SubmitAttempts,
+			&i.ImportClaim,
+			&i.GameID,
+			&i.GameName,
+			&i.CoverID,
+			&i.CatalogSlug,
+			&i.CatalogName,
+			&i.SearchAttempts,
 		); err != nil {
 			return nil, err
 		}
@@ -74,7 +146,7 @@ SET status = 'importing', progress = 1, import_claim = $1, updated_at = now(),
 WHERE id = $2
   AND (status = 'downloading'
        OR (status = 'importing' AND step_started_at < now() - $3::interval))
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
 `
 
 type ClaimImportParams struct {
@@ -115,6 +187,138 @@ func (q *Queries) ClaimImport(ctx context.Context, arg ClaimImportParams) (Reque
 		&i.TorrentIds,
 		&i.SubmitAttempts,
 		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
+	)
+	return i, err
+}
+
+const claimSearch = `-- name: ClaimSearch :one
+UPDATE requests
+SET search_attempts = search_attempts + 1, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND status = 'searching'
+  AND (search_attempts = 0 OR step_started_at < now() - $2::interval)
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
+`
+
+type ClaimSearchParams struct {
+	ID    uuid.UUID
+	Stale pgtype.Interval
+}
+
+// Worker: take a searching request's search. A new one (no attempts) is free; one whose search
+// started more than `stale` ago was left by a pod that died.
+func (q *Queries) ClaimSearch(ctx context.Context, arg ClaimSearchParams) (Request, error) {
+	row := q.db.QueryRow(ctx, claimSearch, arg.ID, arg.Stale)
+	var i Request
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Indexer,
+		&i.SizeBytes,
+		&i.InfoUrl,
+		&i.DownloadUrl,
+		&i.MagnetUrl,
+		&i.TorrentHash,
+		&i.Platform,
+		&i.License,
+		&i.SourceUrl,
+		&i.Status,
+		&i.Progress,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.ImportedPath,
+		&i.ImportedFiles,
+		&i.ImportedSha256,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StepStartedAt,
+		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
+	)
+	return i, err
+}
+
+const createCatalogRequest = `-- name: CreateCatalogRequest :one
+INSERT INTO requests (
+    user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, platform,
+    game_id, game_name, cover_id, catalog_slug, catalog_name, status
+) VALUES (
+    $1, $2, '', 0, '', '', '', $3,
+    $4, $2, $5, $6,
+    $7, 'searching'
+)
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
+`
+
+type CreateCatalogRequestParams struct {
+	UserID      uuid.UUID
+	GameName    string
+	Platform    string
+	GameID      pgtype.Int8
+	CoverID     string
+	CatalogSlug string
+	CatalogName string
+}
+
+// A game from the catalog; the worker finds the release.
+func (q *Queries) CreateCatalogRequest(ctx context.Context, arg CreateCatalogRequestParams) (Request, error) {
+	row := q.db.QueryRow(ctx, createCatalogRequest,
+		arg.UserID,
+		arg.GameName,
+		arg.Platform,
+		arg.GameID,
+		arg.CoverID,
+		arg.CatalogSlug,
+		arg.CatalogName,
+	)
+	var i Request
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Indexer,
+		&i.SizeBytes,
+		&i.InfoUrl,
+		&i.DownloadUrl,
+		&i.MagnetUrl,
+		&i.TorrentHash,
+		&i.Platform,
+		&i.License,
+		&i.SourceUrl,
+		&i.Status,
+		&i.Progress,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.ImportedPath,
+		&i.ImportedFiles,
+		&i.ImportedSha256,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StepStartedAt,
+		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
 	)
 	return i, err
 }
@@ -124,7 +328,7 @@ INSERT INTO requests (
     user_id, title, indexer, size_bytes, info_url, download_url, magnet_url,
     torrent_hash, torrent_ids, platform, license, source_url
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
 `
 
 type CreateRequestParams struct {
@@ -185,6 +389,12 @@ func (q *Queries) CreateRequest(ctx context.Context, arg CreateRequestParams) (R
 		&i.TorrentIds,
 		&i.SubmitAttempts,
 		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
 	)
 	return i, err
 }
@@ -227,8 +437,80 @@ func (q *Queries) FailImport(ctx context.Context, arg FailImportParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const foundRelease = `-- name: FoundRelease :one
+UPDATE requests
+SET status = 'queued', title = $2, indexer = $3, size_bytes = $4, info_url = $5,
+    download_url = $6, magnet_url = $7, torrent_hash = $8, torrent_ids = $9,
+    submit_attempts = 0, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND status = 'searching'
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
+`
+
+type FoundReleaseParams struct {
+	ID          uuid.UUID
+	Title       string
+	Indexer     string
+	SizeBytes   int64
+	InfoUrl     string
+	DownloadUrl string
+	MagnetUrl   string
+	TorrentHash string
+	TorrentIds  []string
+}
+
+// Worker: searching -> queued with the release it picked. The submit step takes it from there.
+func (q *Queries) FoundRelease(ctx context.Context, arg FoundReleaseParams) (Request, error) {
+	row := q.db.QueryRow(ctx, foundRelease,
+		arg.ID,
+		arg.Title,
+		arg.Indexer,
+		arg.SizeBytes,
+		arg.InfoUrl,
+		arg.DownloadUrl,
+		arg.MagnetUrl,
+		arg.TorrentHash,
+		arg.TorrentIds,
+	)
+	var i Request
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Indexer,
+		&i.SizeBytes,
+		&i.InfoUrl,
+		&i.DownloadUrl,
+		&i.MagnetUrl,
+		&i.TorrentHash,
+		&i.Platform,
+		&i.License,
+		&i.SourceUrl,
+		&i.Status,
+		&i.Progress,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.ImportedPath,
+		&i.ImportedFiles,
+		&i.ImportedSha256,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StepStartedAt,
+		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
+	)
+	return i, err
+}
+
 const getRequest = `-- name: GetRequest :one
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests WHERE id = $1 AND user_id = $2
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts FROM requests WHERE id = $1 AND user_id = $2
 `
 
 type GetRequestParams struct {
@@ -266,6 +548,12 @@ func (q *Queries) GetRequest(ctx context.Context, arg GetRequestParams) (Request
 		&i.TorrentIds,
 		&i.SubmitAttempts,
 		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
 	)
 	return i, err
 }
@@ -288,7 +576,7 @@ func (q *Queries) GetTorrentRemoval(ctx context.Context, id uuid.UUID) (TorrentR
 
 const listRequests = `-- name: ListRequests :many
 
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts FROM requests
 WHERE user_id = $1
 ORDER BY created_at DESC
 LIMIT 500
@@ -332,6 +620,12 @@ func (q *Queries) ListRequests(ctx context.Context, userID uuid.UUID) ([]Request
 			&i.TorrentIds,
 			&i.SubmitAttempts,
 			&i.ImportClaim,
+			&i.GameID,
+			&i.GameName,
+			&i.CoverID,
+			&i.CatalogSlug,
+			&i.CatalogName,
+			&i.SearchAttempts,
 		); err != nil {
 			return nil, err
 		}
@@ -347,7 +641,7 @@ const markFailed = `-- name: MarkFailed :execrows
 UPDATE requests
 SET status = 'failed', error_code = $2, error_message = $3, updated_at = now(),
     step_started_at = now()
-WHERE id = $1 AND status = $4 AND status IN ('queued', 'downloading')
+WHERE id = $1 AND status = $4 AND status IN ('searching', 'queued', 'downloading')
 `
 
 type MarkFailedParams struct {
@@ -357,8 +651,8 @@ type MarkFailedParams struct {
 	Status       RequestStatus
 }
 
-// Worker and handler: a queued or downloading request -> failed, from the status the caller
-// saw, with a reason the user can act on.
+// Worker and handler: a searching, queued or downloading request -> failed, from the status
+// the caller saw, with a reason the user can act on.
 func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markFailed,
 		arg.ID,
@@ -408,7 +702,7 @@ UPDATE requests
 SET status = 'downloading', torrent_hash = $2, torrent_ids = $3, updated_at = now(),
     step_started_at = now()
 WHERE id = $1 AND status = 'queued'
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
 `
 
 type MarkSubmittedParams struct {
@@ -448,6 +742,12 @@ func (q *Queries) MarkSubmitted(ctx context.Context, arg MarkSubmittedParams) (R
 		&i.TorrentIds,
 		&i.SubmitAttempts,
 		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
 	)
 	return i, err
 }
@@ -589,10 +889,12 @@ func (q *Queries) RequestForTorrent(ctx context.Context, torrentHash string) (Re
 
 const retryRequest = `-- name: RetryRequest :one
 UPDATE requests
-SET status = 'queued', error_code = '', error_message = '', progress = 0, submit_attempts = 0,
+SET status = CASE WHEN game_id IS NOT NULL AND torrent_hash = '' AND download_url = '' AND magnet_url = ''
+                  THEN 'searching'::request_status ELSE 'queued'::request_status END,
+    error_code = '', error_message = '', progress = 0, submit_attempts = 0, search_attempts = 0,
     updated_at = now(), step_started_at = now()
 WHERE id = $1 AND user_id = $2 AND status = 'failed'
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
 `
 
 type RetryRequestParams struct {
@@ -600,7 +902,8 @@ type RetryRequestParams struct {
 	UserID uuid.UUID
 }
 
-// Back to the queue from failed only; the worker or handler submits it again.
+// Back to the queue from failed only; the worker or handler submits it again. A catalog
+// request that never found a release searches again.
 func (q *Queries) RetryRequest(ctx context.Context, arg RetryRequestParams) (Request, error) {
 	row := q.db.QueryRow(ctx, retryRequest, arg.ID, arg.UserID)
 	var i Request
@@ -631,6 +934,12 @@ func (q *Queries) RetryRequest(ctx context.Context, arg RetryRequestParams) (Req
 		&i.TorrentIds,
 		&i.SubmitAttempts,
 		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
 	)
 	return i, err
 }
