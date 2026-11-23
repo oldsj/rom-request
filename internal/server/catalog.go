@@ -6,7 +6,10 @@ import (
 	"io"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/oldsj/rom-request/internal/api"
+	"github.com/oldsj/rom-request/internal/db/dbq"
 	"github.com/oldsj/rom-request/internal/igdb"
 	"github.com/oldsj/rom-request/internal/library"
 )
@@ -146,6 +149,75 @@ func (s *Server) ListCatalogGames(ctx context.Context, req api.ListCatalogGamesR
 		out.NextOffset = &next
 	}
 	return out, nil
+}
+
+var errGameNotFound = apiError("not_in_catalog", "IGDB has no such game on this platform.")
+
+// ListCatalogRequests lists the user's latest request for each catalog game on a platform.
+func (s *Server) ListCatalogRequests(ctx context.Context, req api.ListCatalogRequestsRequestObject) (api.ListCatalogRequestsResponseObject, error) {
+	u, ok := userFrom(ctx)
+	if !ok {
+		return api.ListCatalogRequests401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
+	}
+	rows, err := s.q.CatalogRequests(ctx, dbq.CatalogRequestsParams{UserID: u.ID, Platform: req.Params.Platform})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]api.Request, len(rows))
+	for i, r := range rows {
+		items[i] = toRequest(r)
+	}
+	return api.ListCatalogRequests200JSONResponse{Items: items}, nil
+}
+
+// RequestCatalogGame saves a request for a catalog game; the worker finds and downloads a
+// release of it.
+func (s *Server) RequestCatalogGame(ctx context.Context, req api.RequestCatalogGameRequestObject) (api.RequestCatalogGameResponseObject, error) {
+	u, ok := userFrom(ctx)
+	if !ok {
+		return api.RequestCatalogGame401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
+	}
+	if s.catalog == nil || s.lib == nil {
+		return api.RequestCatalogGame503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errCatalogOff)}, nil
+	}
+	if s.reqs == nil || s.search == nil {
+		return api.RequestCatalogGame503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errDownloadsOff)}, nil
+	}
+	b := req.Body
+	if ok, err := s.lib.HasPlatform(b.Platform); err != nil {
+		return nil, err
+	} else if !ok {
+		return api.RequestCatalogGame400JSONResponse{BadRequestJSONResponse: api.BadRequestJSONResponse(errPlatform)}, nil
+	}
+	slug := s.catalogSlug(b.Platform)
+	known, err := s.catalog.Platforms(ctx, []string{slug})
+	if err != nil {
+		s.log.WarnContext(ctx, "igdb platforms", "err", err)
+		return api.RequestCatalogGame502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errCatalog)}, nil
+	}
+	platform, ok := known[slug]
+	if !ok {
+		return api.RequestCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotInCatalog)}, nil
+	}
+	game, err := s.catalog.Game(ctx, b.GameId, platform.ID)
+	if errors.Is(err, igdb.ErrNotFound) {
+		return api.RequestCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errGameNotFound)}, nil
+	}
+	if err != nil {
+		s.log.WarnContext(ctx, "igdb game", "err", err)
+		return api.RequestCatalogGame502JSONResponse{BadGatewayJSONResponse: api.BadGatewayJSONResponse(errCatalog)}, nil
+	}
+	r, err := s.q.CreateCatalogRequest(ctx, dbq.CreateCatalogRequestParams{
+		UserID: u.ID, GameName: game.Name, Platform: b.Platform, GameID: pgtype.Int8{Int64: game.ID, Valid: true}, CoverID: game.CoverID,
+		CatalogSlug: platform.Slug, CatalogName: platform.Name,
+	})
+	if isUniqueViolation(err) {
+		return api.RequestCatalogGame409JSONResponse{ConflictJSONResponse: api.ConflictJSONResponse(apiError("already_requested", "This game is already requested."))}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return api.RequestCatalogGame201JSONResponse(toRequest(r)), nil
 }
 
 // GetCatalogCover relays a cover from IGDB's image server.

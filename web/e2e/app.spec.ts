@@ -23,7 +23,7 @@ async function signUp(page: Page) {
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign up' }).click();
-  await expect(page.getByRole('heading', { name: 'Search releases' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Browse games' })).toBeVisible();
   return { email, password };
 }
 
@@ -49,7 +49,7 @@ test('sign up, sign out and back in', async ({ page }) => {
 
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Search releases' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Browse games' })).toBeVisible();
 
   expect(problems).toEqual([]);
 });
@@ -58,6 +58,7 @@ test('search, request, and follow a release into the library', async ({ page }) 
   const problems = watchForProblems(page);
   await signUp(page);
 
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Search' }).click();
   await page.getByLabel('Game or release').fill('homebrew');
   await page.getByRole('button', { name: 'Search' }).click();
   const result = page.getByRole('list', { name: 'Results' }).getByRole('listitem').filter({ hasText: 'Homebrew Quest' });

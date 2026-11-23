@@ -42,22 +42,23 @@ const signedInRoute = createRoute({
 
 const searchRoute = createRoute({
   getParentRoute: () => signedInRoute,
-  path: '/',
-  // From the catalog's Find: the game's name, and the platform folder to request it into.
+  path: '/search',
+  // A game's name and the platform folder to request it into, from a link.
   validateSearch: (s: Record<string, unknown>): { q?: string | undefined; platform?: string | undefined } => ({
     q: typeof s.q === 'string' && s.q.length <= 200 ? s.q : undefined,
     platform: typeof s.platform === 'string' && s.platform.length <= 200 ? s.platform : undefined,
   }),
   component: function Search() {
     const { q, platform } = searchRoute.useSearch();
-    // Remount for a new search from the catalog, so the field and results follow it.
+    // Remount for a new search from a link, so the field and results follow it.
     return <SearchPage key={`${q ?? ''}|${platform ?? ''}`} initialQuery={q} platform={platform} />;
   },
 });
 
+// Browse is the home page.
 const catalogRoute = createRoute({
   getParentRoute: () => signedInRoute,
-  path: '/catalog',
+  path: '/',
   validateSearch: validateCatalogSearch,
   component: function Catalog() {
     return <CatalogPage search={catalogRoute.useSearch()} />;

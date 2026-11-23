@@ -24,7 +24,7 @@ export function RequestsPage() {
       {requests.isError && <Notice tone="error">{errorMessage(requests.error)}</Notice>}
       {requests.data?.items.length === 0 && (
         <Notice>
-          No requests yet. <Link to="/" className="underline">Search for a release</Link>.
+          No requests yet. <Link to="/" className="underline">Browse games</Link> to request one.
         </Notice>
       )}
       <ul className="space-y-3" aria-label="Requests">
@@ -45,14 +45,16 @@ function RequestItem({ request: r, onChanged }: { request: RomRequest; onChanged
   return (
     <Panel as="li">
       <div className="flex items-start justify-between gap-3">
-        <h2 className="font-medium break-words">{r.title}</h2>
+        <h2 className="font-medium break-words">{r.gameName ?? r.title}</h2>
         <Badge tone={statusTone[r.status]}>{statusLabel[r.status]}</Badge>
       </div>
       <p className="text-muted-foreground mt-1 text-sm">
-        {[r.platform, formatBytes(r.sizeBytes), r.indexer, `requested ${formatDate(r.createdAt)}`].join(' · ')}
+        {[r.platform, r.sizeBytes > 0 && formatBytes(r.sizeBytes), r.indexer, `requested ${formatDate(r.createdAt)}`].filter(Boolean).join(' · ')}
       </p>
+      {r.gameName && r.indexer && <p className="text-muted-foreground mt-1 text-xs break-words">Release: {r.title}</p>}
 
       {r.status === 'downloading' && <Progress label="Downloading" value={r.progress} className="mt-3" />}
+      {r.status === 'searching' && <p className="text-muted-foreground mt-3 text-sm">Looking for a release in Prowlarr. This can take a few minutes.</p>}
       {r.status === 'queued' && <p className="text-muted-foreground mt-3 text-sm">Waiting for qBittorrent.</p>}
       {r.status === 'importing' && <p className="text-muted-foreground mt-3 text-sm">Copying into the library…</p>}
       {r.status === 'imported' && r.importedPath && (

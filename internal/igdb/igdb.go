@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -247,6 +248,32 @@ func (c *Client) Games(ctx context.Context, platformID int64, search string, sor
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// ErrNotFound means IGDB has no such game on the platform.
+var ErrNotFound = errors.New("igdb: no such game")
+
+// Game looks one game up by id, on a platform.
+func (c *Client) Game(ctx context.Context, id, platformID int64) (Game, error) {
+	var raw []struct {
+		ID        int64   `json:"id"`
+		Name      string  `json:"name"`
+		Platforms []int64 `json:"platforms"`
+		Cover     *struct {
+			ImageID string `json:"image_id"`
+		} `json:"cover"`
+	}
+	if err := c.query(ctx, "games", fmt.Sprintf("fields name,platforms,cover.image_id; where id = %d; limit 1;", id), &raw); err != nil {
+		return Game{}, err
+	}
+	if len(raw) == 0 || raw[0].Name == "" || !slices.Contains(raw[0].Platforms, platformID) {
+		return Game{}, ErrNotFound
+	}
+	g := Game{ID: raw[0].ID, Name: raw[0].Name}
+	if raw[0].Cover != nil && ValidImageID(raw[0].Cover.ImageID) {
+		g.CoverID = raw[0].Cover.ImageID
+	}
+	return g, nil
 }
 
 // cleanSearch makes user text safe inside an Apicalypse string: no quotes, backslashes or

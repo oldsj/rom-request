@@ -24,8 +24,8 @@ export function AppLayout() {
       <header className="border-border mb-8 flex flex-wrap items-center justify-between gap-4 border-b pb-4">
         <p className="text-lg font-semibold">ROM Request</p>
         <nav aria-label="Main" className="flex items-center gap-4">
-          <Link to="/" className={navLink} activeOptions={{ exact: true }}>Search</Link>
-          <Link to="/catalog" className={navLink}>Browse</Link>
+          <Link to="/" className={navLink} activeOptions={{ exact: true }}>Browse</Link>
+          <Link to="/search" className={navLink}>Search</Link>
           <Link to="/requests" className={navLink}>Requests</Link>
           <Button onClick={() => { logout.mutate({}); }} disabled={logout.isPending}>Sign out</Button>
         </nav>

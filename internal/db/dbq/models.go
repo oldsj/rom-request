@@ -16,6 +16,7 @@ import (
 type RequestStatus string
 
 const (
+	RequestStatusSearching   RequestStatus = "searching"
 	RequestStatusQueued      RequestStatus = "queued"
 	RequestStatusDownloading RequestStatus = "downloading"
 	RequestStatusImporting   RequestStatus = "importing"
@@ -92,6 +93,12 @@ type Request struct {
 	TorrentIds     []string
 	SubmitAttempts int32
 	ImportClaim    pgtype.UUID
+	GameID         pgtype.Int8
+	GameName       string
+	CoverID        string
+	CatalogSlug    string
+	CatalogName    string
+	SearchAttempts int32
 }
 
 type SearchResult struct {
