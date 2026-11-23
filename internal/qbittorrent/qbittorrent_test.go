@@ -98,3 +98,34 @@ func TestMatches(t *testing.T) {
 		t.Errorf("Matches wrong for %+v", tor)
 	}
 }
+
+// qBittorrent up to 5.2 answers a sign-in with 200 "Ok.", 5.3 with 204; a refusal sets no cookie.
+func TestSignInAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer func(w http.ResponseWriter)
+		ok     bool
+	}{
+		{"5.2", func(w http.ResponseWriter) { setSID(w); _, _ = io.WriteString(w, "Ok.") }, true},
+		{"5.3", func(w http.ResponseWriter) { setSID(w); w.WriteHeader(http.StatusNoContent) }, true},
+		{"refused", func(w http.ResponseWriter) { _, _ = io.WriteString(w, "Fails.") }, false},
+		{"refused 204", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }, false},
+		{"banned", func(w http.ResponseWriter) { w.WriteHeader(http.StatusForbidden) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { tc.answer(w) }))
+			defer srv.Close()
+			c, err := New(srv.URL, "u", "p", srv.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.login(t.Context()); (err == nil) != tc.ok {
+				t.Errorf("login: %v", err)
+			}
+		})
+	}
+}
+
+func setSID(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "SID", Value: "s", Path: "/"})
+}
