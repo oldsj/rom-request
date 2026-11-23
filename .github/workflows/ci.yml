@@ -136,6 +136,9 @@ jobs:
       # `make e2e` without its Compose database reset (the service above is a fresh app_e2e), spelled
       # out because Playwright's image has no make. Keep in step with the build and e2e targets.
       - run: pnpm --dir web build
+      # The checkout belongs to the runner's user, not the container's, so Git (which go build
+      # asks for the commit it stamps into the binary) refuses it until it is marked safe.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: CGO_ENABLED=0 go build -tags embedweb -trimpath -o bin/app ./cmd/app
       - run: pnpm exec playwright test
         working-directory: web
