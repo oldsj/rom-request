@@ -4,7 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const navigate = vi.fn();
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate, Link: () => null }));
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  Link: ({ children, className }: { children?: React.ReactNode; className?: string }) => <a className={className}>{children}</a>,
+}));
 const { CatalogPage, validateCatalogSearch } = await import('./catalog');
 
 const answers: Record<string, unknown> = {
