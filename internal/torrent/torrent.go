@@ -22,6 +22,10 @@ const MaxTorrentBytes = 10 << 20
 // ErrInvalid means the input is not a usable torrent or magnet link.
 var ErrInvalid = errors.New("torrent: invalid")
 
+// ErrLinkFailed means the download link answered with an error status, perhaps for now:
+// indexers' links expire, and Prowlarr answers 500 when an indexer refuses one.
+var ErrLinkFailed = errors.New("torrent: fetch failed")
+
 // Source is what to hand qBittorrent: a .torrent file or a magnet link, and its ids.
 type Source struct {
 	File   []byte
@@ -173,7 +177,7 @@ func Resolve(ctx context.Context, hc *http.Client, magnet, downloadURL string) (
 			// The indexer no longer has the release; asking again won't help.
 			return Source{}, fmt.Errorf("%w: release gone (status %d)", ErrInvalid, resp.StatusCode)
 		case resp.StatusCode != http.StatusOK:
-			return Source{}, fmt.Errorf("torrent: fetch: status %d", resp.StatusCode)
+			return Source{}, fmt.Errorf("%w: status %d", ErrLinkFailed, resp.StatusCode)
 		case readErr != nil:
 			return Source{}, fmt.Errorf("torrent: fetch: %w", redact(readErr))
 		case len(body) > MaxTorrentBytes:

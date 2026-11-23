@@ -54,6 +54,17 @@ SET status = 'queued', title = $2, indexer = $3, size_bytes = $4, info_url = $5,
 WHERE id = $1 AND status = 'searching'
 RETURNING *;
 
+-- name: SearchAgain :one
+-- Worker: a catalog request whose release link stopped working (indexers' links expire) goes
+-- back to searching, at once: step_started_at is set back past the stale wait. Its search
+-- attempts carry on counting, so this ends.
+UPDATE requests
+SET status = 'searching', title = game_name, indexer = '', size_bytes = 0, info_url = '',
+    download_url = '', magnet_url = '', torrent_hash = '', torrent_ids = '{}', submit_attempts = 0,
+    updated_at = now(), step_started_at = now() - interval '1 day'
+WHERE id = $1 AND status = 'queued' AND game_id IS NOT NULL
+RETURNING *;
+
 -- name: RequestForTorrent :one
 -- Any live request for a torrent, whoever made it.
 SELECT id, user_id, status FROM requests

@@ -35,7 +35,7 @@ const (
 
 var (
 	failNoRelease = Failure{"no_release", "No release of this game for this platform was found. Retry later, or search for one yourself."}
-	failSearch    = Failure{"search_failed", "Prowlarr kept failing to answer the search. Retry once it's back."}
+	failSearch    = Failure{"search_failed", "Prowlarr kept failing to answer the search or to hand over the release. Retry later."}
 )
 
 // searchAll searches for the searching requests among rs, a few at once, and returns when all
@@ -75,6 +75,11 @@ func (s *Service) searchRequest(ctx context.Context, r dbq.Request) {
 	}
 	if err != nil {
 		s.log.ErrorContext(ctx, "claim search", "request", r.ID, "err", err)
+		return
+	}
+	if claimed.SearchAttempts > maxSearchAttempts {
+		// Searched again and again (its releases' links kept failing).
+		s.fail(ctx, claimed, failSearch)
 		return
 	}
 	g := Game{Name: claimed.GameName, Folder: claimed.Platform, Slug: claimed.CatalogSlug, PlatformName: claimed.CatalogName}

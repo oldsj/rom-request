@@ -149,6 +149,16 @@ func (s *Service) Submit(ctx context.Context, r dbq.Request, src *torrent.Source
 	}
 	if src == nil {
 		got, err := s.Resolve(ctx, r.MagnetUrl, r.DownloadUrl)
+		if r.GameID.Valid && (errors.Is(err, torrent.ErrInvalid) || errors.Is(err, torrent.ErrLinkFailed)) {
+			// A release the worker picked: pick again, with fresh links.
+			s.log.InfoContext(ctx, "catalog request: release link failed, searching again", "request", r.ID, "err", err)
+			if again, err := s.q.SearchAgain(ctx, r.ID); err == nil {
+				return again, nil
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return r, err
+			}
+			return s.reload(ctx, r)
+		}
 		if errors.Is(err, torrent.ErrInvalid) {
 			s.fail(ctx, r, failReleaseUnreadable)
 			return s.reload(ctx, r)
