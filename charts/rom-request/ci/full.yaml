@@ -15,6 +15,7 @@ auth:
     clientId: rom-request
     name: Pocket ID
     allowedGroups: games
+    limitedGroups: kids
     groupsClaim: groups
 
 secrets:

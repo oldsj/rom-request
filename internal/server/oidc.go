@@ -95,9 +95,17 @@ func (s *Server) OidcCallback(ctx context.Context, req api.OidcCallbackRequestOb
 		s.log.WarnContext(ctx, "oidc sign-in", "err", err)
 		return fail("oidc_unavailable")
 	}
-	if len(s.cfg.OIDCAllowedGroups) > 0 && !slices.ContainsFunc(id.Groups, func(g string) bool {
-		return slices.Contains(s.cfg.OIDCAllowedGroups, g)
-	}) {
+	in := func(groups []string) bool {
+		return slices.ContainsFunc(id.Groups, func(g string) bool { return slices.Contains(groups, g) })
+	}
+	// An allowed group's member is a full user, whatever else; with no allowed groups, everyone
+	// is, but for the limited groups' members.
+	var limited bool
+	switch {
+	case len(s.cfg.OIDCAllowedGroups) > 0 && in(s.cfg.OIDCAllowedGroups):
+	case in(s.cfg.OIDCLimitedGroups):
+		limited = true
+	case len(s.cfg.OIDCAllowedGroups) > 0:
 		s.log.InfoContext(ctx, "oidc sign-in outside the allowed groups", "subject", id.Subject)
 		return fail("oidc_forbidden")
 	}
@@ -107,6 +115,12 @@ func (s *Server) OidcCallback(ctx context.Context, req api.OidcCallbackRequestOb
 	}
 	if code != "" {
 		return fail(code)
+	}
+	// Each sign-in follows the groups, which may have changed.
+	if user.Limited != limited {
+		if user, err = s.q.SetUserLimited(ctx, dbq.SetUserLimitedParams{ID: user.ID, Limited: limited}); err != nil {
+			return nil, err
+		}
 	}
 	cookie, err := s.startSession(ctx, user.ID)
 	if err != nil {

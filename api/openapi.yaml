@@ -291,6 +291,9 @@ paths:
         "In the library" is a match of the game's name against the names in the platform's
         folder, ignoring case, punctuation, a leading "The" and tags in brackets such as
         "(USA)". It can miss a game filed under another name.
+
+        A limited user doesn't see games rated mature; a page can then hold fewer games than
+        the page size, and `nextOffset` still leads on.
       tags: [catalog]
       parameters:
         - name: platform
@@ -562,6 +565,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '502':
           $ref: '#/components/responses/BadGateway'
         '503':
@@ -616,6 +621,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -715,13 +722,18 @@ components:
 
     User:
       type: object
-      required: [id, email]
+      required: [id, email, limited]
       properties:
         id:
           type: string
           format: uuid
         email:
           type: string
+        limited:
+          type: boolean
+          description: |
+            A child's account: browses and requests only catalog games not rated mature, and
+            can't search releases (403).
 
     AuthMethods:
       type: object

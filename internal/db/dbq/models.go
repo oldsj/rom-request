@@ -138,4 +138,5 @@ type User struct {
 	PasswordHash string
 	CreatedAt    time.Time
 	OidcSubject  pgtype.Text
+	Limited      bool
 }

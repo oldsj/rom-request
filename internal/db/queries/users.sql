@@ -20,3 +20,8 @@ RETURNING *;
 UPDATE users SET oidc_subject = $2
 WHERE id = $1 AND oidc_subject IS NULL
 RETURNING *;
+
+-- name: SetUserLimited :one
+-- At each OIDC sign-in, from the provider's groups.
+UPDATE users SET limited = $2 WHERE id = $1
+RETURNING *;

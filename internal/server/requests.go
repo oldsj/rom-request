@@ -113,6 +113,10 @@ func (s *Server) Search(ctx context.Context, req api.SearchRequestObject) (api.S
 	if !ok {
 		return api.Search401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
 	}
+	if u.Limited {
+		// A free-text release search can't tell what's mature; children request from the catalog.
+		return api.Search403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(errLimited)}, nil
+	}
 	if s.search == nil {
 		return api.Search503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errSearchOff)}, nil
 	}
@@ -186,6 +190,10 @@ func (s *Server) CreateRequest(ctx context.Context, req api.CreateRequestRequest
 	u, ok := userFrom(ctx)
 	if !ok {
 		return api.CreateRequest401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
+	}
+	if u.Limited {
+		// A free-text release search can't tell what's mature; children request from the catalog.
+		return api.CreateRequest403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(errLimited)}, nil
 	}
 	if s.reqs == nil {
 		return api.CreateRequest503JSONResponse{UnavailableJSONResponse: api.UnavailableJSONResponse(errDownloadsOff)}, nil

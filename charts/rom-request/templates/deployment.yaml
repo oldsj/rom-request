@@ -89,6 +89,10 @@ spec:
             - name: OIDC_ALLOWED_GROUPS
               value: {{ . | quote }}
             {{- end }}
+            {{- with .limitedGroups }}
+            - name: OIDC_LIMITED_GROUPS
+              value: {{ . | quote }}
+            {{- end }}
             {{- else if not $.Values.auth.passwordLogin }}
             {{- fail "auth.passwordLogin=false needs auth.oidc.issuer" }}
             {{- end }}

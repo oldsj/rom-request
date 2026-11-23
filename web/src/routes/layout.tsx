@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 
 import { Button } from '@app/design';
@@ -11,6 +11,8 @@ const navLink = 'text-muted-foreground hover:text-foreground aria-[current=page]
 export function AppLayout() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  // A child's account browses the catalog only: a free-text release search can't tell what's mature.
+  const limited = useQuery(meQuery).data?.limited === true;
   const logout = $api.useMutation('post', '/auth/logout', {
     onSuccess: () => {
       queryClient.setQueryData(meQuery.queryKey, null);
@@ -25,7 +27,7 @@ export function AppLayout() {
         <p className="text-lg font-semibold">ROM Request</p>
         <nav aria-label="Main" className="flex items-center gap-4">
           <Link to="/" className={navLink} activeOptions={{ exact: true }}>Browse</Link>
-          <Link to="/search" className={navLink}>Search</Link>
+          {!limited && <Link to="/search" className={navLink}>Search</Link>}
           <Link to="/requests" className={navLink}>Requests</Link>
           <Button onClick={() => { logout.mutate({}); }} disabled={logout.isPending}>Sign out</Button>
         </nav>

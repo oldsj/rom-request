@@ -3,7 +3,7 @@ name: rom-request
 description: ROM Request - search Prowlarr, download with qBittorrent, import into a RomM library
 type: application
 # Bump on every change under charts/: CI publishes each version once and refuses to overwrite.
-version: 0.5.0
+version: 0.6.0
 # The image tag (the commit) values.image.digest was built from. Bump together with the digest.
 appVersion: "0.0.0-unreleased"
 kubeVersion: ">=1.30.0-0"

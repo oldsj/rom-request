@@ -74,7 +74,8 @@ staging folder) to RomM's `exclude.platforms`.
 
 To sign in, either use an OIDC provider such as [Pocket ID](https://pocket-id.org) (set
 `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `OIDC_REDIRECT_URL`, optionally
-`OIDC_ALLOWED_GROUPS`, and `PASSWORD_LOGIN=false` once it works) or start once with
+`OIDC_ALLOWED_GROUPS` and `OIDC_LIMITED_GROUPS` (children: catalog games not rated mature, no
+release search), and `PASSWORD_LOGIN=false` once it works) or start once with
 `ALLOW_SIGNUP=true` to create a password account. All settings are in
 [development and deployment](docs/development.md).
 

@@ -50,20 +50,21 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email
+SELECT u.id, u.email, u.limited
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
 `
 
 type GetSessionUserRow struct {
-	ID    uuid.UUID
-	Email string
+	ID      uuid.UUID
+	Email   string
+	Limited bool
 }
 
 func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (GetSessionUserRow, error) {
 	row := q.db.QueryRow(ctx, getSessionUser, tokenHash)
 	var i GetSessionUserRow
-	err := row.Scan(&i.ID, &i.Email)
+	err := row.Scan(&i.ID, &i.Email, &i.Limited)
 	return i, err
 }

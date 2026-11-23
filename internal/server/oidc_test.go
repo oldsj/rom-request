@@ -151,7 +151,7 @@ func newOIDCServer(t *testing.T, mutate func(*config.Config)) (*client, *fakePro
 	cfg := c.srv.cfg
 	c.srv.oidc = oidc.New(oidc.Config{
 		Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, RedirectURL: c.base + "/api/auth/oidc/callback",
-		GroupsClaim: cfg.OIDCGroupsClaim, WantGroups: len(cfg.OIDCAllowedGroups) > 0,
+		GroupsClaim: cfg.OIDCGroupsClaim, WantGroups: len(cfg.OIDCAllowedGroups) > 0 || len(cfg.OIDCLimitedGroups) > 0,
 	}, p.ts.Client())
 	c.http.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return c, p
@@ -254,6 +254,45 @@ func TestOIDCAllowedGroups(t *testing.T) {
 	}
 	if back := c.signIn(p, ada(map[string]any{"groups": []string{"family", "games"}})); back != "/" {
 		t.Errorf("in a group: %q", back)
+	}
+}
+
+// The limited groups' members sign in as limited users; each sign-in follows the groups.
+func TestOIDCLimitedGroups(t *testing.T) {
+	c, p := newOIDCServer(t, func(cfg *config.Config) {
+		cfg.OIDCAllowedGroups, cfg.OIDCLimitedGroups = []string{"parents"}, []string{"kids"}
+	})
+	me := func() any {
+		t.Helper()
+		code, m, _ := c.do("GET", "/api/auth/me", nil)
+		if code != 200 {
+			t.Fatalf("me: %d %v", code, m)
+		}
+		return m["limited"]
+	}
+	if back := c.signIn(p, ada(map[string]any{"groups": []string{"family"}})); back != "/login?error=oidc_forbidden" {
+		t.Errorf("in neither: %q", back)
+	}
+	if back := c.signIn(p, ada(map[string]any{"groups": []string{"kids"}})); back != "/" || me() != true {
+		t.Errorf("a kid: %q", back)
+	}
+	if code, body, _ := c.do("GET", "/api/search?q=zelda", nil); code != 403 || errCode(body) != "limited_account" {
+		t.Errorf("a kid's search: %d %v", code, body)
+	}
+	if back := c.signIn(p, ada(map[string]any{"groups": []string{"kids", "parents"}})); back != "/" || me() != false {
+		t.Errorf("a parent too: %q", back)
+	}
+	if back := c.signIn(p, ada(map[string]any{"groups": []string{"kids"}})); back != "/" || me() != true {
+		t.Errorf("a kid again: %q", back)
+	}
+
+	// With no allowed groups everyone signs in; the limited groups' members limited.
+	c, p = newOIDCServer(t, func(cfg *config.Config) { cfg.OIDCLimitedGroups = []string{"kids"} })
+	if back := c.signIn(p, ada(nil)); back != "/" || me() != false {
+		t.Errorf("anyone: %q", back)
+	}
+	if back := c.signIn(p, ada(map[string]any{"groups": []string{"kids"}})); back != "/" || me() != true {
+		t.Errorf("a kid, no allowed groups: %q", back)
 	}
 }
 

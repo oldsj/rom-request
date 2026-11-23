@@ -8,12 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/oldsj/rom-request/internal/config"
+	"github.com/oldsj/rom-request/internal/db/dbq"
 	"github.com/oldsj/rom-request/internal/igdb"
 )
 
@@ -32,7 +36,9 @@ type fakeIGDB struct {
 var gbaGames = []string{
 	`{"id":1,"name":"The Legend of Zelda: The Minish Cap","first_release_date":1099008000,"summary":"Link shrinks.","cover":{"id":9,"image_id":"co1abc"}}`,
 	`{"id":2,"name":"Metroid Fusion","first_release_date":1037577600}`,
-	`{"id":3,"name":"Pokémon FireRed Version","cover":{"id":10,"image_id":"co2def"}}`,
+	`{"id":3,"name":"Pokémon FireRed Version","cover":{"id":10,"image_id":"co2def"},"age_ratings":[{"id":1,"rating_category":3},{"id":2,"rating_category":10}]}`,
+	// Rated E10+ by the ESRB but 18 by PEGI: mature.
+	`{"id":4,"name":"Duke Nukem Advance","age_ratings":[{"id":3,"rating_category":4},{"id":4,"rating_category":12}]}`,
 }
 
 func newFakeIGDB(t *testing.T) *fakeIGDB {
@@ -173,7 +179,7 @@ func TestCatalogBrowse(t *testing.T) {
 		t.Fatalf("games: %d %v", code, body)
 	}
 	items := body["items"].([]any)
-	if len(items) != 3 || body["nextOffset"] != nil {
+	if len(items) != 4 || body["nextOffset"] != nil {
 		t.Fatalf("games: %v", body)
 	}
 	zelda, metroid := items[0].(map[string]any), items[1].(map[string]any)
@@ -183,7 +189,8 @@ func TestCatalogBrowse(t *testing.T) {
 	if metroid["inLibrary"] != false || metroid["coverId"] != nil {
 		t.Errorf("metroid: %v", metroid)
 	}
-	if q, _ := f.last.Load().(string); !strings.Contains(q, "sort total_rating_count desc") || !strings.Contains(q, "game_type = (0,8,9,10,11)") {
+	if q, _ := f.last.Load().(string); !strings.Contains(q, "sort total_rating_count desc") || !strings.Contains(q, "game_type = (0,8,9,10,11)") ||
+		!strings.Contains(q, "age_ratings.rating_category,themes") {
 		t.Errorf("query: %s", q)
 	}
 
@@ -313,5 +320,52 @@ func TestCatalogGameDetails(t *testing.T) {
 	}
 	if code, _, _ := c.other().do("GET", "/api/catalog/games/1?platform=gba", nil); code != 401 {
 		t.Errorf("signed out: %d", code)
+	}
+}
+
+// A limited user (a child) doesn't see, open or request a game rated mature.
+func TestCatalogLimitedUser(t *testing.T) {
+	r := catalogRig(t)
+	_, me, _ := r.do("GET", "/api/auth/me", nil)
+	if me["limited"] != false {
+		t.Fatalf("me: %v", me)
+	}
+	if code, _, _ := r.do("GET", "/api/catalog/games/4?platform=GBA", nil); code != 200 {
+		t.Errorf("a parent opens the mature game: %d", code)
+	}
+	if _, err := r.srv.q.SetUserLimited(t.Context(), dbq.SetUserLimitedParams{ID: uuid.MustParse(me["id"].(string)), Limited: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body, _ := r.do("GET", "/api/catalog/games?platform=GBA", nil)
+	var names []string
+	for _, it := range body["items"].([]any) {
+		names = append(names, it.(map[string]any)["name"].(string))
+	}
+	if len(names) != 3 || slices.Contains(names, "Duke Nukem Advance") {
+		t.Errorf("a kid's browse: %v", names)
+	}
+	if code, body, _ := r.do("GET", "/api/catalog/games/4?platform=GBA", nil); code != 404 || errCode(body) != "not_in_catalog" {
+		t.Errorf("a kid opens the mature game: %d %v", code, body)
+	}
+	if code, body, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 4}); code != 404 || errCode(body) != "not_in_catalog" {
+		t.Errorf("a kid requests the mature game: %d %v", code, body)
+	}
+	if code, _, _ := r.do("GET", "/api/catalog/games/3?platform=GBA", nil); code != 200 {
+		t.Errorf("a kid opens an E game: %d", code)
+	}
+	if code, body, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 2}); code != 201 {
+		t.Errorf("a kid requests an unrated game: %d %v", code, body)
+	}
+	for _, c := range []struct {
+		method, path string
+		body         any
+	}{
+		{"GET", "/api/search?q=metroid", nil},
+		{"POST", "/api/requests", map[string]any{"releaseId": uuid.NewString(), "platform": "GBA"}},
+	} {
+		if code, body, _ := r.do(c.method, c.path, c.body); code != 403 || errCode(body) != "limited_account" {
+			t.Errorf("a kid: %s %s: %d %v", c.method, c.path, code, body)
+		}
 	}
 }

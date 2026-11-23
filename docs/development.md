@@ -32,6 +32,7 @@ Environment only. Secrets have no defaults.
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | The client registered at the provider; the secret is empty for a public client |
 | `OIDC_REDIRECT_URL` | | `https://<host>/api/auth/oidc/callback`, registered at the provider |
 | `OIDC_ALLOWED_GROUPS` | | Comma-separated: only members of one may sign in (asks for the `groups` scope) |
+| `OIDC_LIMITED_GROUPS` | | Comma-separated: members sign in as limited users (children). They browse and request only catalog games no rating board rates mature (ESRB M/AO, PEGI 18, ...) and can't search releases. A member of an allowed group too is not limited |
 | `OIDC_GROUPS_CLAIM` | `groups` | The ID token claim listing groups |
 | `OIDC_NAME` | `single sign-on` | The provider's name on the sign-in button |
 | `TRUSTED_PROXIES` | | CIDRs whose `X-Forwarded-For` is believed |
