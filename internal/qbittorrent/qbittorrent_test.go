@@ -99,7 +99,7 @@ func TestMatches(t *testing.T) {
 	}
 }
 
-// qBittorrent up to 5.2 answers a sign-in with 200 "Ok.", 5.3 with 204; a refusal sets no cookie.
+// qBittorrent up to 5.2 answers a sign-in with 200 "Ok." or "Fails.", 5.3 with 204 or 401.
 func TestSignInAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -107,9 +107,13 @@ func TestSignInAnswers(t *testing.T) {
 		ok     bool
 	}{
 		{"5.2", func(w http.ResponseWriter) { setSID(w); _, _ = io.WriteString(w, "Ok.") }, true},
-		{"5.3", func(w http.ResponseWriter) { setSID(w); w.WriteHeader(http.StatusNoContent) }, true},
+		{"5.3", func(w http.ResponseWriter) {
+			http.SetCookie(w, &http.Cookie{Name: "QBT_SID_8080", Value: "s", Path: "/"})
+			w.WriteHeader(http.StatusNoContent)
+		}, true},
 		{"refused", func(w http.ResponseWriter) { _, _ = io.WriteString(w, "Fails.") }, false},
-		{"refused 204", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }, false},
+		{"5.3 signed in already", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }, true},
+		{"5.3 refused", func(w http.ResponseWriter) { w.WriteHeader(http.StatusUnauthorized) }, false},
 		{"banned", func(w http.ResponseWriter) { w.WriteHeader(http.StatusForbidden) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -130,13 +130,13 @@ func newFakeQBittorrent(t *testing.T) *fakeQBittorrent {
 			_, _ = io.WriteString(w, "Fails.")
 			return
 		}
-		// qBittorrent 5.3: 204 and the cookie, no body.
-		http.SetCookie(w, &http.Cookie{Name: "SID", Value: "s1", Path: "/"})
+		// qBittorrent 5.3: 204 and the QBT_SID_<port> cookie, no body.
+		http.SetCookie(w, &http.Cookie{Name: "QBT_SID_8080", Value: "s1", Path: "/"})
 		w.WriteHeader(http.StatusNoContent)
 	})
 	authed := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if c, err := r.Cookie("SID"); err != nil || c.Value != "s1" {
+			if c, err := r.Cookie("QBT_SID_8080"); err != nil || c.Value != "s1" {
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}

@@ -121,10 +121,10 @@ func (c *Client) login(ctx context.Context) error {
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 	_ = resp.Body.Close()
-	// Up to 5.2 a sign-in is 200 "Ok."; 5.3 answers 204 with no body. Either way it sets the
-	// session cookie, and a refused one doesn't.
+	// Up to 5.2 a sign-in is 200 "Ok." (a refusal 200 "Fails."); 5.3 answers 204 with no body
+	// (a refusal 401). Its session cookie, QBT_SID_<port>, comes only with a new session.
 	ok := resp.StatusCode == http.StatusOK && strings.TrimSpace(string(body)) == "Ok." ||
-		resp.StatusCode == http.StatusNoContent && hasCookie(resp, "SID")
+		resp.StatusCode == http.StatusNoContent
 	if !ok {
 		return fmt.Errorf("qbittorrent: sign-in refused (status %d)", resp.StatusCode)
 	}
@@ -276,13 +276,4 @@ func (c *Client) Delete(ctx context.Context, hash string, deleteFiles bool) erro
 		return fmt.Errorf("qbittorrent: delete: status %d", status)
 	}
 	return nil
-}
-
-func hasCookie(resp *http.Response, name string) bool {
-	for _, c := range resp.Cookies() {
-		if c.Name == name && c.Value != "" {
-			return true
-		}
-	}
-	return false
 }
