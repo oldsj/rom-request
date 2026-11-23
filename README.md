@@ -62,6 +62,7 @@ environment variables:
 | `QBITTORRENT_SAVE_PATH` | The folder, as qBittorrent sees it, that requests download into |
 | `DOWNLOAD_DIR` | The same folder as ROM Request sees it (read-only is enough) |
 | `LIBRARY_DIR` | The ROM library, writable; `LIBRARY_EXCLUDE` (default `bios`) lists folders that aren't platforms |
+| `IGDB_CLIENT_ID`, `IGDB_CLIENT_SECRET` | Browse: every game IGDB lists for each library platform, marked when you have it (the Twitch app RomM uses) |
 
 Every integration is optional; the app says what isn't set up. Add `.rom-request` (the import
 staging folder) to RomM's `exclude.platforms`.

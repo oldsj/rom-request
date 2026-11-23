@@ -121,3 +121,24 @@ func TestLoadOIDC(t *testing.T) {
 		t.Errorf("http issuer on localhost: %v", err)
 	}
 }
+
+func TestLoadCatalog(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost/app")
+	t.Setenv("IGDB_CLIENT_ID", "id")
+	if _, err := Load(); err == nil {
+		t.Error("IGDB_CLIENT_ID accepted without a secret")
+	}
+	t.Setenv("IGDB_CLIENT_SECRET", "secret")
+	if _, err := Load(); err == nil {
+		t.Error("catalog accepted without a library")
+	}
+	t.Setenv("LIBRARY_DIR", "/data/library")
+	t.Setenv("CATALOG_PLATFORMS", "megadrive=genesis-slash-megadrive,pce=turbografx16--1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CatalogEnabled() || cfg.CatalogPlatforms["pce"] != "turbografx16--1" {
+		t.Errorf("catalog config: %+v", cfg)
+	}
+}

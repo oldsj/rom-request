@@ -86,6 +86,10 @@ auth:
 #     key: qbittorrent-username
 #   - name: QBITTORRENT_PASSWORD
 #     key: qbittorrent-password
+#   - name: IGDB_CLIENT_ID         (the game catalog; both or neither)
+#     key: igdb-client-id
+#   - name: IGDB_CLIENT_SECRET
+#     key: igdb-client-secret
 secrets:
   existingSecret: ""
   env: []
@@ -107,6 +111,15 @@ integrations:
   # Top-level library folders that aren't platforms, comma-separated.
   libraryExclude: bios
   workerInterval: 15s
+  # The game catalog (Browse) reads IGDB with a Twitch application's credentials, the same
+  # ones RomM uses: put IGDB_CLIENT_ID and IGDB_CLIENT_SECRET in secrets.env. It needs the
+  # library, and egress to id.twitch.tv, api.igdb.com and images.igdb.com on 443 (see
+  # ci/full.yaml).
+  catalog:
+    # Library folders whose names aren't IGDB platform slugs and aren't among the built-in
+    # aliases (psx, genesis, megadrive, segacd, 32x, gamecube, pce, …), as folder=slug pairs,
+    # comma-separated, e.g. "md=genesis-slash-megadrive".
+    platforms: ""
 
 # The pod's user and groups. The library must be writable by them: on NFS, match the owner
 # of the share (or add its group to supplementalGroups). fsGroup is applied to volumes that

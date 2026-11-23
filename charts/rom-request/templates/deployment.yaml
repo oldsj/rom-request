@@ -144,6 +144,10 @@ spec:
               value: {{ $int.libraryExclude | quote }}
             - name: WORKER_INTERVAL
               value: {{ $int.workerInterval | quote }}
+            {{- with $int.catalog.platforms }}
+            - name: CATALOG_PLATFORMS
+              value: {{ . | quote }}
+            {{- end }}
             {{- range .Values.secrets.env }}
             - name: {{ .name | quote }}
               valueFrom:

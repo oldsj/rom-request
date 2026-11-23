@@ -7,6 +7,7 @@
 | React frontend | Search releases, choose a platform, record license and source, follow requests |
 | Go API | Sessions, search, requests; the only thing that talks to the integrations |
 | Request worker | Runs in the same binary: submits torrents, follows downloads, imports |
+| IGDB | The catalog behind Browse: games per platform and their covers. The server calls it (covers too, so the CSP stays same-origin) with a Twitch app token it caches; "in library" compares normalized names with the platform folder's files |
 | PostgreSQL | Users, sessions, OIDC sign-ins in progress, short-lived search results, requests and their progress |
 | Prowlarr | Searches the operator's indexers |
 | qBittorrent | Downloads each request into its own folder |

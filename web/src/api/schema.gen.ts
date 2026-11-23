@@ -180,6 +180,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/catalog/platforms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The library's platforms, matched to the game catalog (IGDB) */
+        get: operations["listCatalogPlatforms"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/catalog/games": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every game on a platform, from IGDB, marked when the library has it
+         * @description "In the library" is a match of the game's name against the names in the platform's
+         *     folder, ignoring case, punctuation, a leading "The" and tags in brackets such as
+         *     "(USA)". It can miss a game filed under another name.
+         */
+        get: operations["listCatalogGames"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/catalog/covers/{coverId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A game's cover art, fetched from IGDB by the server
+         * @description Served from here so the CSP stays same-origin and browsers don't contact IGDB.
+         */
+        get: operations["getCatalogCover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -296,6 +355,8 @@ export interface components {
             oidcName?: string;
         };
         Status: {
+            /** @description The game catalog (IGDB) is configured */
+            catalog: boolean;
             /** @description Search is configured */
             prowlarr: boolean;
             /** @description Downloads are configured */
@@ -306,6 +367,27 @@ export interface components {
         Platform: {
             /** @description The library folder, e.g. GBA */
             name: string;
+        };
+        CatalogPlatform: {
+            /** @description The library folder */
+            name: string;
+            /** @description IGDB's name for the platform; absent when IGDB doesn't know the folder */
+            catalogName?: string;
+        };
+        CatalogGame: {
+            /**
+             * Format: int64
+             * @description IGDB's id
+             */
+            id: number;
+            name: string;
+            /** @description Year of first release */
+            year?: number;
+            summary?: string;
+            /** @description For /catalog/covers/{coverId} */
+            coverId?: string;
+            /** @description A name in the platform folder matches */
+            inLibrary: boolean;
         };
         Release: {
             /**
@@ -686,6 +768,96 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listCatalogPlatforms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every platform folder; those IGDB knows carry its name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CatalogPlatform"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listCatalogGames: {
+        parameters: {
+            query: {
+                /** @description The library folder */
+                platform: string;
+                /** @description Search by name; ranks by relevance instead of `sort` */
+                q?: string;
+                sort?: "popular" | "name";
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of games */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CatalogGame"][];
+                        /** @description Pass as `offset` for the next page; absent on the last */
+                        nextOffset?: number;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["Unavailable"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getCatalogCover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                coverId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cover, 264×374 */
+            200: {
+                headers: {
+                    "Cache-Control": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["BadGateway"];
             503: components["responses"]["Unavailable"];
             default: components["responses"]["Error"];
         };

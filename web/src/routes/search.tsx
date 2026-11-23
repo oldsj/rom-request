@@ -7,8 +7,8 @@ import { $api, errorMessage, type Release } from '../api/client';
 import { field } from '../api/form';
 import { formatBytes, formatDate } from '../format';
 
-export function SearchPage() {
-  const [query, setQuery] = useState('');
+export function SearchPage({ initialQuery = '', platform }: { initialQuery?: string | undefined; platform?: string | undefined } = {}) {
+  const [query, setQuery] = useState(initialQuery.trim());
   const status = $api.useQuery('get', '/status');
   const results = $api.useQuery(
     'get',
@@ -42,7 +42,7 @@ export function SearchPage() {
 
       {status.data?.prowlarr && (
         <form onSubmit={onSearch} role="search" aria-label="Releases" className="mb-8 flex items-end gap-2">
-          <Input label="Game or release" name="q" required minLength={2} maxLength={200} className="flex-1" />
+          <Input label="Game or release" name="q" required minLength={2} maxLength={200} className="flex-1" defaultValue={query} />
           <Button type="submit" variant="primary">Search</Button>
         </form>
       )}
@@ -54,13 +54,13 @@ export function SearchPage() {
       {results.isError && <Notice tone="error">{errorMessage(results.error)}</Notice>}
       {results.data?.items.length === 0 && <Notice>No torrent releases found for “{query}”.</Notice>}
       <ul className="space-y-3" aria-label="Results">
-        {results.data?.items.map((r) => <ReleaseItem key={r.id} release={r} canRequest={canRequest} />)}
+        {results.data?.items.map((r) => <ReleaseItem key={r.id} release={r} canRequest={canRequest} platform={platform} />)}
       </ul>
     </section>
   );
 }
 
-function ReleaseItem({ release, canRequest }: { release: Release; canRequest: boolean }) {
+function ReleaseItem({ release, canRequest, platform }: { release: Release; canRequest: boolean; platform?: string | undefined }) {
   const [open, setOpen] = useState(false);
   const meta = [
     release.indexer,
@@ -83,12 +83,12 @@ function ReleaseItem({ release, canRequest }: { release: Release; canRequest: bo
       {canRequest && !open && (
         <Button className="mt-3" onClick={() => { setOpen(true); }}>Request</Button>
       )}
-      {open && <RequestForm release={release} onCancel={() => { setOpen(false); }} />}
+      {open && <RequestForm release={release} platform={platform} onCancel={() => { setOpen(false); }} />}
     </Panel>
   );
 }
 
-function RequestForm({ release, onCancel }: { release: Release; onCancel: () => void }) {
+function RequestForm({ release, platform, onCancel }: { release: Release; platform?: string | undefined; onCancel: () => void }) {
   const navigate = useNavigate();
   const platforms = $api.useQuery('get', '/platforms');
   const create = $api.useMutation('post', '/requests', {
@@ -111,7 +111,15 @@ function RequestForm({ release, onCancel }: { release: Release; onCancel: () => 
   return (
     <form onSubmit={onSubmit} aria-label={`Request ${release.title}`} className="mt-4 space-y-3">
       {platforms.isError && <Notice tone="error">{errorMessage(platforms.error)}</Notice>}
-      <Select label="Platform" name="platform" required defaultValue="" hint="The library folder it goes into.">
+      <Select
+        label="Platform"
+        name="platform"
+        required
+        // Wait for the list, so a preset platform (from the catalog) is an option when the select mounts.
+        key={platforms.isPending ? 'loading' : 'ready'}
+        defaultValue={platforms.data?.items.some((p) => p.name === platform) ? platform : ''}
+        hint="The library folder it goes into."
+      >
         <option value="" disabled>{platforms.isPending ? 'Loading…' : 'Choose a platform'}</option>
         {platforms.data?.items.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
       </Select>
