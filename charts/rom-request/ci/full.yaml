@@ -1,0 +1,64 @@
+# A deployment with every integration, as a GitOps repository's values file would set it.
+fullnameOverride: rom-request
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+config:
+  trustedProxies: 10.244.0.0/16
+database:
+  cnpg:
+    storage:
+      size: 10Gi
+secrets:
+  existingSecret: rom-request
+  env:
+    - name: PROWLARR_API_KEY
+      key: prowlarr-api-key
+    - name: QBITTORRENT_USERNAME
+      key: qbittorrent-username
+    - name: QBITTORRENT_PASSWORD
+      key: qbittorrent-password
+integrations:
+  prowlarr:
+    url: http://prowlarr.media.svc:9696
+    categories: "1000"
+  qbittorrent:
+    url: http://qbittorrent.torrent.svc:8080
+    savePath: /media/downloads/rom-request
+storage:
+  downloads:
+    nfs:
+      server: nas.example.com
+      path: /volume1/media/downloads/rom-request
+      readOnly: true
+  library:
+    nfs:
+      server: nas.example.com
+      path: /volume1/roms
+route:
+  enabled: true
+  hostname: roms.example.com
+  gateway:
+    name: home-gateway
+    namespace: gateway
+networkPolicy:
+  extraEgress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: media
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prowlarr
+      ports:
+        - port: 9696
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: torrent
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qbittorrent
+      ports:
+        - port: 8080
+          protocol: TCP

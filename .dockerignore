@@ -1,0 +1,11 @@
+**/node_modules
+web/dist
+web/design/dist
+web/design/.preview-build
+bin
+.git
+.env
+*.local
+web/playwright-report
+web/test-results
+charts

@@ -1,0 +1,8 @@
+# Build output (pnpm --dir web build:design) and design-sync's working files.
+dist/
+.preview-build/
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules

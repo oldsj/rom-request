@@ -1,0 +1,14 @@
+# Go hot reload for `make dev`: rebuilds and restarts the API when Go or SQL files change.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/app ./cmd/app"
+  entrypoint = ["./tmp/app", "serve"]
+  include_ext = ["go", "sql"]
+  exclude_dir = ["web", "tmp", "bin", "charts", "tools"]
+  delay = 200
+  stop_on_error = true
+
+[log]
+  main_only = true

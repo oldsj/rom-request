@@ -1,0 +1,74 @@
+{{- if .Values.database.cnpg.enabled }}
+{{- $db := .Values.database.cnpg }}
+# CNPG makes <name>-app (username, password, uri) for the owner role and <name>-ca for TLS.
+# Only TLS connections with SCRAM passwords are accepted.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "app.dbCluster" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  instances: {{ $db.instances }}
+  imageName: {{ $db.imageName | quote }}
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+      postInitApplicationSQL:
+        - REVOKE ALL ON DATABASE app FROM PUBLIC
+  postgresql:
+    parameters:
+      password_encryption: scram-sha-256
+      ssl_min_protocol_version: TLSv1.3
+    pg_hba:
+      - hostnossl all all all reject
+      - hostssl app app all scram-sha-256
+  resources:
+    {{- toYaml $db.resources | nindent 4 }}
+  storage:
+    size: {{ $db.storage.size | quote }}
+    {{- with $db.storage.storageClass }}
+    storageClass: {{ . | quote }}
+    {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Only the app, the CNPG operator and the cluster's own instances reach Postgres. Egress to the
+# Kubernetes API (the instance manager needs it) is a cluster-specific rule, so it is open here;
+# tighten it with a CiliumNetworkPolicy in the cluster's config if wanted.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.dbCluster" . }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "app.dbCluster" . }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "app.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "app.dbCluster" . }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 8000
+          protocol: TCP
+{{- end }}
+{{- end }}

@@ -1,0 +1,14 @@
+# No CNPG: an existing database Secret, CA and peers.
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+database:
+  cnpg:
+    enabled: false
+  existingSecret: app-database
+  urlKey: DATABASE_URL
+  caSecret: postgres-ca
+networkPolicy:
+  databaseTo:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: databases

@@ -1,0 +1,17 @@
+# pnpm settings for web/. Supply-chain defaults:
+# - minimumReleaseAge: never resolve a version published less than 7 days ago (in minutes),
+#   the same cooldown Renovate uses. A hijacked release is usually pulled within that time.
+# - Dependency install scripts are blocked (pnpm's default); allow one in onlyBuiltDependencies
+#   only after reading what it runs.
+minimumReleaseAge: 10080
+onlyBuiltDependencies: []
+strictPeerDependencies: false
+
+# Security overrides. Remove each once the packages that pull it in depend on a fixed version.
+overrides:
+  # GHSA-g3hv-75wg-m249 (moderate, ReDoS): eslint and typescript-eslint ship minimatch 10.
+  minimatch@>=7.0.0 <11.0.1: ^11.0.3
+
+# The design system (tokens, base components, previews) is its own package: design/README.md.
+packages:
+  - design

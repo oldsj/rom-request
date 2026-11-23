@@ -1,0 +1,566 @@
+openapi: 3.1.0
+info:
+  title: ROM Request API
+  version: 0.1.0
+  description: |
+    The wire contract. The Go server types and handlers interface (internal/api) and the
+    TypeScript client (web/src/api/schema.gen.ts) are generated from this file: change it
+    first, then run `make gen`.
+
+    Authentication is a server-side session in the `__Host-session` cookie (HttpOnly, Secure,
+    SameSite=Lax). Cross-site state-changing requests are refused by Go's
+    `http.CrossOriginProtection`, so the client sends no CSRF token.
+servers:
+  - url: /api
+security:
+  - session: []
+tags:
+  - name: auth
+    description: Sign up, sign in and out
+  - name: requests
+    description: Search releases, request them and follow them into the ROM library
+
+paths:
+  /auth/signup:
+    post:
+      operationId: signup
+      summary: Create an account and sign in
+      description: Only when the server runs with ALLOW_SIGNUP=true; otherwise 403.
+      tags: [auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '201':
+          description: Signed up and signed in
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSession'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/login:
+    post:
+      operationId: login
+      summary: Sign in
+      tags: [auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: Signed in
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSession'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Sign out and end the session
+      tags: [auth]
+      security: []
+      responses:
+        '204':
+          description: Signed out (also when there was no session)
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SetSession'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/me:
+    get:
+      operationId: getMe
+      summary: The signed-in user
+      tags: [auth]
+      responses:
+        '200':
+          description: The signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /status:
+    get:
+      operationId: getStatus
+      summary: Which integrations the server has configured
+      description: |
+        Configuration only, not reachability: a configured service can still be down, which
+        the operation that calls it reports.
+      tags: [requests]
+      responses:
+        '200':
+          description: Integration status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /platforms:
+    get:
+      operationId: listPlatforms
+      summary: Platform folders in the ROM library
+      description: The library's top-level folders, which RomM maps to its platforms.
+      tags: [requests]
+      responses:
+        '200':
+          description: Platforms, by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Platform'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /search:
+    get:
+      operationId: search
+      summary: Search Prowlarr for torrent releases
+      description: |
+        Results are listings from the operator's indexers, not license checks. Each result's id
+        is valid for an hour, for creating a request.
+      tags: [requests]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 200
+      responses:
+        '200':
+          description: Torrent results, most seeded first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Release'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /requests:
+    get:
+      operationId: listRequests
+      summary: The signed-in user's requests, newest first
+      tags: [requests]
+      responses:
+        '200':
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Request'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createRequest
+      summary: Request a release from a search, for a platform
+      description: |
+        Sends the torrent to qBittorrent. The request is then followed until its files are
+        copied into the platform's library folder. 404 when the search result has expired;
+        409 when the torrent is already requested.
+      tags: [requests]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestInput'
+      responses:
+        '201':
+          description: Requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /requests/{requestId}:
+    parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: deleteRequest
+      summary: Remove a request
+      description: |
+        A request that hasn't been imported is cancelled: its torrent and partial download are
+        removed from qBittorrent. An imported request's record is removed; the library and the
+        downloaded files are left alone. 409 while importing.
+      tags: [requests]
+      responses:
+        '204':
+          description: Removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /requests/{requestId}/retry:
+    parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: retryRequest
+      summary: Try a failed request again
+      description: Safe after partial work; picks up from what qBittorrent already has. 409 unless failed.
+      tags: [requests]
+      responses:
+        '200':
+          description: Queued again
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/Error'
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-session
+
+  headers:
+    SetSession:
+      description: Sets or clears the __Host-session cookie
+      schema:
+        type: string
+
+  schemas:
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+
+    Status:
+      type: object
+      required: [prowlarr, qbittorrent, library]
+      properties:
+        prowlarr:
+          type: boolean
+          description: Search is configured
+        qbittorrent:
+          type: boolean
+          description: Downloads are configured
+        library:
+          type: boolean
+          description: The ROM library and download folders are configured
+
+    Platform:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The library folder, e.g. GBA
+
+    Release:
+      type: object
+      required: [id, title, indexer, sizeBytes, infoUrl, categories]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Pass to createRequest within an hour
+        title:
+          type: string
+        indexer:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        seeders:
+          type: integer
+        leechers:
+          type: integer
+        publishedAt:
+          type: string
+          format: date-time
+        infoUrl:
+          type: string
+          description: The indexer's page for the release; empty when there is none
+        categories:
+          type: array
+          items:
+            type: string
+
+    RequestInput:
+      type: object
+      additionalProperties: false
+      required: [releaseId, platform]
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: A library folder from listPlatforms
+        license:
+          type: string
+          maxLength: 200
+          description: The release's license or permission statement, as published; empty if unknown
+        sourceUrl:
+          type: string
+          maxLength: 2000
+          pattern: '^(https?://\S+)?$'
+          description: The creator's or publisher's release page
+
+    RequestStatus:
+      type: string
+      enum: [queued, downloading, importing, imported, failed]
+
+    Request:
+      type: object
+      required: [id, title, indexer, sizeBytes, infoUrl, platform, license, sourceUrl, status, progress, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        indexer:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        infoUrl:
+          type: string
+        platform:
+          type: string
+        license:
+          type: string
+          description: Empty when unknown
+        sourceUrl:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        progress:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+        importedPath:
+          type: string
+          description: Library-relative path, once imported
+        importedFiles:
+          type: integer
+        importedSha256:
+          type: string
+          description: SHA-256 of the imported file, for a single-file game
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        importedAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable, machine-readable, snake_case
+          examples: [not_found]
+        message:
+          type: string
+          description: Safe to show to the user; never contains internals
+
+  responses:
+    BadRequest:
+      description: The request does not match the contract
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Not signed in, or wrong credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Not allowed, including any cross-origin unsafe request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No such resource for this user
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Already exists, or not in a state that allows this
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadGateway:
+      description: An integration (Prowlarr, qBittorrent) failed or refused the call
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: The integration this needs isn't configured on the server
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: Rate limited; retry after the Retry-After header
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error:
+      description: Unexpected error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

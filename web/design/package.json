@@ -1,0 +1,16 @@
+{
+  "name": "@app/design",
+  "private": true,
+  "version": "0.0.0",
+  "description": "This app's design system: tokens, base components and their previews.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "types": "./src/index.ts",
+  "style": "./src/styles.css",
+  "peerDependencies": {
+    "react": "^19.3.1"
+  }
+}

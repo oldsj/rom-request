@@ -1,0 +1,142 @@
+# Defaults are safe and minimal; a deployment's own values file sets the rest.
+fullnameOverride: ""
+# Two pods on different nodes, so a node reboot doesn't take the app down. The app keeps nothing
+# in memory that must be shared (sessions and requests are in Postgres; rate limits are per pod).
+# Both pods run the request worker; each step is claimed in Postgres, so they never collide.
+replicaCount: 2
+
+# Keep the pods on different nodes (kubernetes.io/hostname). DoNotSchedule with
+# nodeTaintsPolicy Honor: a cordoned, NotReady or tainted node (the control plane) doesn't count,
+# so with one worker left both pods still run there. The image must be multi-arch.
+spread:
+  enabled: true
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule
+
+# A PodDisruptionBudget, when replicaCount > 1: a drain moves the pods one at a time.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+image:
+  repository: ghcr.io/oldsj/rom-request
+  # Required: the multi-arch image digest for Chart.appVersion. Images are never pulled by tag.
+  digest: ""
+
+config:
+  logLevel: info
+  # Anyone may create an account. Turn on to make the first account, then off.
+  allowSignup: false
+  sessionTTL: 720h
+  authRatePerMinute: 10
+  # CIDRs of the gateway pods whose X-Forwarded-For is trusted (often the cluster's pod network,
+  # such as 10.244.0.0/16). Empty: use the TCP peer as the client address.
+  trustedProxies: ""
+
+database:
+  # cnpg.enabled: the chart makes a CloudNativePG Cluster named <fullname>-db, and the app
+  # reads the `uri` key of the <fullname>-db-app Secret that CNPG generates, verifying the
+  # server certificate against <fullname>-db-ca. Otherwise give an existing Secret.
+  cnpg:
+    enabled: true
+    instances: 1
+    imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie@sha256:53a4ece3bb160ec8e0612c484e2b4111fc4e0e443e522fd3d0394fc683dacd86
+    storage:
+      size: 5Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+  # Used when cnpg.enabled is false.
+  existingSecret: ""
+  urlKey: uri
+  # Optional Secret with ca.crt; then PGSSLMODE=verify-full.
+  caSecret: ""
+
+# App secrets beyond the database, as env vars from one existing Secret (made by your secret
+# store). Secret values never go in values. The integrations need:
+#   - name: PROWLARR_API_KEY
+#     key: prowlarr-api-key
+#   - name: QBITTORRENT_USERNAME   (both omitted when qBittorrent skips auth for this client)
+#     key: qbittorrent-username
+#   - name: QBITTORRENT_PASSWORD
+#     key: qbittorrent-password
+secrets:
+  existingSecret: ""
+  env: []
+
+# Prowlarr, qBittorrent and the ROM library. Each is optional; the app reports what's missing.
+integrations:
+  prowlarr:
+    # e.g. http://prowlarr.media.svc:9696
+    url: ""
+    # Newznab category ids to search, comma-separated ("1000" is Console). Empty: all.
+    categories: ""
+  qbittorrent:
+    # e.g. http://qbittorrent.torrent.svc:8080
+    url: ""
+    # An existing qBittorrent category to file torrents under, or empty.
+    category: ""
+    # The download folder as qBittorrent sees it; storage.downloads mounts the same folder here.
+    savePath: ""
+  # Top-level library folders that aren't platforms, comma-separated.
+  libraryExclude: bios
+  workerInterval: 15s
+
+# The two folders the importer works with, as volume sources (nfs, persistentVolumeClaim, ...).
+# Both must be shared by every replica, so ReadWriteMany storage or NFS.
+storage:
+  # The folder qBittorrent downloads into (integrations.qbittorrent.savePath), mounted read-only
+  # at /data/downloads.
+  downloads: {}
+  # The ROM library RomM scans, mounted read-write at /data/library. Imports add files and never
+  # replace any. Add ".rom-request" (the staging folder) to RomM's exclude.platforms.
+  library: {}
+
+# Exposure through a Gateway API gateway: a cert-manager Certificate, a ListenerSet on the
+# gateway and an HTTPRoute.
+route:
+  enabled: false
+  hostname: ""
+  gateway:
+    name: ""
+    namespace: ""
+  clusterIssuer: letsencrypt-prod
+
+networkPolicy:
+  enabled: true
+  # Pods allowed to reach the app: Envoy Gateway's proxies by default. Narrow it to one gateway
+  # with a podSelector on gateway.envoyproxy.io/owning-gateway-name.
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: envoy-gateway-system
+  dnsTo:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  # Database peers when cnpg is off (with cnpg on, the chart's own Cluster is allowed).
+  databaseTo: []
+  databasePort: 5432
+  # NetworkPolicyEgressRule objects appended as-is: allow Prowlarr and qBittorrent here, e.g.
+  #   - to:
+  #       - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: media } }
+  #         podSelector: { matchLabels: { app.kubernetes.io/name: prowlarr } }
+  #     ports: [{ port: 9696, protocol: TCP }]
+  extraEgress: []
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+    ephemeral-storage: 16Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+    ephemeral-storage: 64Mi

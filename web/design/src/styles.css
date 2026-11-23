@@ -1,0 +1,19 @@
+/*
+ * The design system's stylesheet, imported once by the app after Tailwind:
+ *
+ *   @import 'tailwindcss';
+ *   @import '@app/design/styles.css';
+ *
+ * It does not import Tailwind itself, so the app controls that once.
+ */
+
+@import './tokens.css';
+@import './theme.css';
+
+@source './components';
+
+@layer base {
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}

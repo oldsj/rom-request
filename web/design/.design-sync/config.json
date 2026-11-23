@@ -1,0 +1,8 @@
+{
+  "shape": "package",
+  "pkg": "@app/design",
+  "globalName": "AppDS",
+  "buildCmd": "pnpm --dir .. build:design",
+  "cssEntry": "dist/styles.css",
+  "readmeHeader": ".design-sync/conventions.md"
+}

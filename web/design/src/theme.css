@@ -1,0 +1,34 @@
+/*
+ * The Tailwind 4 theme: semantic names only, no values (those are in tokens.css). Colours come only from tokens.css: `--color-*: initial` removes Tailwind's
+ * default palette, so bg-stone-100 or text-red-700 generate nothing and `pnpm check:design` flags
+ * them. Add a token in tokens.css (every theme), then map it here.
+ */
+
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary-hover: var(--secondary-hover);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-hover: var(--danger-hover);
+  --color-success: var(--success);
+  --color-ring: var(--ring);
+}
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --radius-control: var(--control-radius);
+  --radius-panel: var(--panel-radius);
+}

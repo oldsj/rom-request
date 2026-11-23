@@ -1,0 +1,3 @@
+@import 'tailwindcss';
+/* Tokens, the Tailwind theme and the components' classes: web/design (README there). */
+@import '@app/design/styles.css';

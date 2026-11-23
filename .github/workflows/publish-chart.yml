@@ -1,0 +1,47 @@
+name: Publish chart
+
+# After CI passes on main, push charts/<repo name> to oci://ghcr.io/<owner>/charts when its version
+# is new. A GitOps repository then pins the published version.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-chart
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Install checksum-verified Helm
+        run: |
+          tools_dir=$(mktemp -d)
+          bash scripts/install-chart-tools.sh "$tools_dir"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish the chart version if new
+        run: bash scripts/publish-chart.sh "charts/${GITHUB_REPOSITORY#*/}"
+      - if: always()
+        run: helm registry logout ghcr.io || true

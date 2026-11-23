@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "What a Go + pnpm repository needs on top of the Renovate preset its runner applies.",
+  "extends": [
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy",
+    "gomodUpdateImportPaths",
+    "pnpmDedupe"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep the Go toolchain current: the go line in go.mod and tools/go.mod, and the golang image, move together. Without rangeStrategy bump Renovate leaves the go directive alone.",
+      "matchDatasources": [
+        "golang-version"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "One Go version everywhere.",
+      "matchPackageNames": [
+        "go",
+        "golang",
+        "docker.io/library/golang"
+      ],
+      "groupName": "go toolchain"
+    },
+    {
+      "description": "One Node version everywhere: .node-version and the node image.",
+      "matchPackageNames": [
+        "node",
+        "docker.io/library/node"
+      ],
+      "groupName": "node"
+    },
+    {
+      "description": "TypeScript 7 (the Go port) is not supported by typescript-eslint or openapi-typescript yet; hold at 6.x until they are.",
+      "matchPackageNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "Postgres follows the cluster's CNPG image (major moves are migrations, not bumps).",
+      "matchPackageNames": [
+        "postgres",
+        "docker.io/library/postgres",
+        "ghcr.io/cloudnative-pg/postgresql"
+      ],
+      "groupName": "postgres",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ]
+    }
+  ]
+}

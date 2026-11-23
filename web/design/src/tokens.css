@@ -1,0 +1,84 @@
+/*
+ * Design tokens: this app's identity, and the only file that holds values. theme.css only maps
+ * these names to Tailwind utilities, so it is the same in every app made from the template.
+ * Colours here are the only place a colour is defined. Components use them through the Tailwind
+ * utilities that src/theme.css maps (bg-surface, text-muted-foreground, border-input, ...), and
+ * plain CSS can use them as var(--surface).
+ *
+ * Light is the default. Dark follows the system setting unless <html data-theme="light"> pins
+ * light; <html data-theme="dark"> pins dark. Every theme defines every key below.
+ *
+ * Contrast (WCAG 2.2): foreground and muted-foreground are at least 4.5:1 on background, surface
+ * and surface-muted, and so are danger and success (status text); input (control borders) and
+ * ring are at least 3:1 on background and surface.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Shape and type: the same in every theme. */
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --control-radius: 0.375rem;
+  --panel-radius: 0.5rem;
+
+  --background: #fafaf9;
+  --foreground: #1c1917;
+  --surface: #ffffff;
+  --surface-muted: #f5f5f4;
+  --muted-foreground: #57534e;
+  --border: #e7e5e4;
+  --input: #78716c;
+  --primary: #1c1917;
+  --primary-foreground: #fafaf9;
+  --primary-hover: #44403c;
+  --secondary-hover: #f5f5f4;
+  --danger: #b91c1c;
+  --danger-foreground: #ffffff;
+  --danger-hover: #991b1b;
+  --success: #166534;
+  --ring: #2563eb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --background: #0c0a09;
+    --foreground: #f5f5f4;
+    --surface: #1c1917;
+    --surface-muted: #292524;
+    --muted-foreground: #a8a29e;
+    --border: #292524;
+    --input: #78716c;
+    --primary: #f5f5f4;
+    --primary-foreground: #1c1917;
+    --primary-hover: #d6d3d1;
+    --secondary-hover: #292524;
+    --danger: #f87171;
+    --danger-foreground: #1c1917;
+    --danger-hover: #fca5a5;
+    --success: #4ade80;
+    --ring: #60a5fa;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --background: #0c0a09;
+  --foreground: #f5f5f4;
+  --surface: #1c1917;
+  --surface-muted: #292524;
+  --muted-foreground: #a8a29e;
+  --border: #292524;
+  --input: #78716c;
+  --primary: #f5f5f4;
+  --primary-foreground: #1c1917;
+  --primary-hover: #d6d3d1;
+  --secondary-hover: #292524;
+  --danger: #f87171;
+  --danger-foreground: #1c1917;
+  --danger-hover: #fca5a5;
+  --success: #4ade80;
+  --ring: #60a5fa;
+}
