@@ -15,7 +15,7 @@ export interface paths {
         put?: never;
         /**
          * Create an account and sign in
-         * @description Only when the server runs with ALLOW_SIGNUP=true; otherwise 403.
+         * @description Only when the server runs with ALLOW_SIGNUP=true and password sign-in on; otherwise 403.
          */
         post: operations["signup"];
         delete?: never;
@@ -33,7 +33,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sign in */
+        /**
+         * Sign in
+         * @description 403 `password_login_disabled` when the server runs with PASSWORD_LOGIN=false.
+         */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -52,6 +55,67 @@ export interface paths {
         put?: never;
         /** Sign out and end the session */
         post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How this server lets people sign in */
+        get: operations["getAuthMethods"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/oidc/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start signing in through the OIDC provider
+         * @description A browser navigation, not an API call: redirects to the provider (authorization code
+         *     flow with PKCE), with a short-lived cookie binding the sign-in to this browser. When
+         *     OIDC isn't configured or the provider can't be reached, redirects to
+         *     `/login?error=<code>` instead.
+         */
+        get: operations["oidcLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Finish signing in through the OIDC provider
+         * @description Where the provider sends the browser back. On success, starts a session and redirects
+         *     to `/`; otherwise redirects to `/login?error=<code>`.
+         */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -221,6 +285,16 @@ export interface components {
             id: string;
             email: string;
         };
+        AuthMethods: {
+            /** @description Email and password sign-in */
+            password: boolean;
+            /** @description Anyone may create a password account */
+            signup: boolean;
+            /** @description Sign-in through the OIDC provider */
+            oidc: boolean;
+            /** @description The provider's name for the sign-in button */
+            oidcName?: string;
+        };
         Status: {
             /** @description Search is configured */
             prowlarr: boolean;
@@ -305,6 +379,16 @@ export interface components {
         };
     };
     responses: {
+        /** @description Redirect */
+        Redirect: {
+            headers: {
+                Location: string;
+                /** @description A session or sign-in cookie, when one is set */
+                "Set-Cookie"?: string;
+                [name: string]: unknown;
+            };
+            content?: never;
+        };
         /** @description The request does not match the contract */
         BadRequest: {
             headers: {
@@ -452,6 +536,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Error"];
         };
@@ -474,6 +559,65 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["Forbidden"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getAuthMethods: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sign-in methods that are on */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthMethods"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    oidcLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            302: components["responses"]["Redirect"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Error"];
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                /** @description Set by the provider when it didn't sign the user in */
+                error?: string;
+                error_description?: string;
+                iss?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                /** @description The sign-in's state, set by /auth/oidc/login */
+                "__Host-oidc"?: string;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            302: components["responses"]["Redirect"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Error"];
         };
     };

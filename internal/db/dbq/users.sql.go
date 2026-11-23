@@ -7,12 +7,40 @@ package dbq
 
 import (
 	"context"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const createOIDCUser = `-- name: CreateOIDCUser :one
+INSERT INTO users (email, password_hash, oidc_subject)
+VALUES ($1, '', $2)
+RETURNING id, email, password_hash, created_at, oidc_subject
+`
+
+type CreateOIDCUserParams struct {
+	Email       string
+	OidcSubject pgtype.Text
+}
+
+// No password: such an account signs in only through OIDC.
+func (q *Queries) CreateOIDCUser(ctx context.Context, arg CreateOIDCUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createOIDCUser, arg.Email, arg.OidcSubject)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.OidcSubject,
+	)
+	return i, err
+}
 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, password_hash, created_at
+RETURNING id, email, password_hash, created_at, oidc_subject
 `
 
 type CreateUserParams struct {
@@ -28,12 +56,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.OidcSubject,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at FROM users WHERE email = $1
+SELECT id, email, password_hash, created_at, oidc_subject FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -44,6 +73,49 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.OidcSubject,
+	)
+	return i, err
+}
+
+const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
+SELECT id, email, password_hash, created_at, oidc_subject FROM users WHERE oidc_subject = $1
+`
+
+func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByOIDCSubject, oidcSubject)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.OidcSubject,
+	)
+	return i, err
+}
+
+const linkOIDCSubject = `-- name: LinkOIDCSubject :one
+UPDATE users SET oidc_subject = $2
+WHERE id = $1 AND oidc_subject IS NULL
+RETURNING id, email, password_hash, created_at, oidc_subject
+`
+
+type LinkOIDCSubjectParams struct {
+	ID          uuid.UUID
+	OidcSubject pgtype.Text
+}
+
+// Links an existing account (matched by a verified email) that isn't linked yet.
+func (q *Queries) LinkOIDCSubject(ctx context.Context, arg LinkOIDCSubjectParams) (User, error) {
+	row := q.db.QueryRow(ctx, linkOIDCSubject, arg.ID, arg.OidcSubject)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.OidcSubject,
 	)
 	return i, err
 }

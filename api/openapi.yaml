@@ -25,7 +25,7 @@ paths:
     post:
       operationId: signup
       summary: Create an account and sign in
-      description: Only when the server runs with ALLOW_SIGNUP=true; otherwise 403.
+      description: Only when the server runs with ALLOW_SIGNUP=true and password sign-in on; otherwise 403.
       tags: [auth]
       security: []
       requestBody:
@@ -59,6 +59,7 @@ paths:
     post:
       operationId: login
       summary: Sign in
+      description: 403 `password_login_disabled` when the server runs with PASSWORD_LOGIN=false.
       tags: [auth]
       security: []
       requestBody:
@@ -81,6 +82,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         default:
@@ -100,6 +103,91 @@ paths:
               $ref: '#/components/headers/SetSession'
         '403':
           $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/methods:
+    get:
+      operationId: getAuthMethods
+      summary: How this server lets people sign in
+      tags: [auth]
+      security: []
+      responses:
+        '200':
+          description: The sign-in methods that are on
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMethods'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/oidc/login:
+    get:
+      operationId: oidcLogin
+      summary: Start signing in through the OIDC provider
+      description: |
+        A browser navigation, not an API call: redirects to the provider (authorization code
+        flow with PKCE), with a short-lived cookie binding the sign-in to this browser. When
+        OIDC isn't configured or the provider can't be reached, redirects to
+        `/login?error=<code>` instead.
+      tags: [auth]
+      security: []
+      responses:
+        '302':
+          $ref: '#/components/responses/Redirect'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      summary: Finish signing in through the OIDC provider
+      description: |
+        Where the provider sends the browser back. On success, starts a session and redirects
+        to `/`; otherwise redirects to `/login?error=<code>`.
+      tags: [auth]
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+        - name: state
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: error
+          in: query
+          description: Set by the provider when it didn't sign the user in
+          schema:
+            type: string
+            maxLength: 256
+        - name: error_description
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+        - name: iss
+          in: query
+          schema:
+            type: string
+            maxLength: 2048
+        - name: __Host-oidc
+          in: cookie
+          description: The sign-in's state, set by /auth/oidc/login
+          schema:
+            type: string
+            maxLength: 128
+      responses:
+        '302':
+          $ref: '#/components/responses/Redirect'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         default:
           $ref: '#/components/responses/Error'
 
@@ -360,6 +448,23 @@ components:
         email:
           type: string
 
+    AuthMethods:
+      type: object
+      required: [password, signup, oidc]
+      properties:
+        password:
+          type: boolean
+          description: Email and password sign-in
+        signup:
+          type: boolean
+          description: Anyone may create a password account
+        oidc:
+          type: boolean
+          description: Sign-in through the OIDC provider
+        oidcName:
+          type: string
+          description: The provider's name for the sign-in button
+
     Status:
       type: object
       required: [prowlarr, qbittorrent, library]
@@ -509,6 +614,17 @@ components:
           description: Safe to show to the user; never contains internals
 
   responses:
+    Redirect:
+      description: Redirect
+      headers:
+        Location:
+          required: true
+          schema:
+            type: string
+        Set-Cookie:
+          description: A session or sign-in cookie, when one is set
+          schema:
+            type: string
     BadRequest:
       description: The request does not match the contract
       content:

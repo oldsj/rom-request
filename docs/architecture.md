@@ -7,7 +7,7 @@
 | React frontend | Search releases, choose a platform, record license and source, follow requests |
 | Go API | Sessions, search, requests; the only thing that talks to the integrations |
 | Request worker | Runs in the same binary: submits torrents, follows downloads, imports |
-| PostgreSQL | Users, sessions, short-lived search results, requests and their progress |
+| PostgreSQL | Users, sessions, OIDC sign-ins in progress, short-lived search results, requests and their progress |
 | Prowlarr | Searches the operator's indexers |
 | qBittorrent | Downloads each request into its own folder |
 | ROM library | The `<platform>/` folders RomM scans; ROM Request adds files to it |

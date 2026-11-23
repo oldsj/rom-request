@@ -58,6 +58,13 @@ func (ns NullRequestStatus) Value() (driver.Value, error) {
 	return string(ns.RequestStatus), nil
 }
 
+type OidcLogin struct {
+	StateHash []byte
+	Nonce     string
+	Verifier  string
+	ExpiresAt time.Time
+}
+
 type Request struct {
 	ID             uuid.UUID
 	UserID         uuid.UUID
@@ -123,4 +130,5 @@ type User struct {
 	Email        string
 	PasswordHash string
 	CreatedAt    time.Time
+	OidcSubject  pgtype.Text
 }

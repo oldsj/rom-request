@@ -34,6 +34,30 @@ type Config struct {
 	TrustedProxies []netip.Prefix `env:"TRUSTED_PROXIES" envSeparator:","`
 	// AuthRatePerMinute is the sign-in and sign-up attempts allowed per client address.
 	AuthRatePerMinute int `env:"AUTH_RATE_PER_MINUTE" envDefault:"10"`
+	// PasswordLogin allows signing in (and, with AllowSignup, signing up) with an email and
+	// password. Turn it off to sign in only through OIDC.
+	PasswordLogin bool `env:"PASSWORD_LOGIN" envDefault:"true"`
+
+	// OIDC sign-in (for example Pocket ID). Optional: set the issuer, client id and redirect URL
+	// to turn it on. An account is made on first sign-in, whatever AllowSignup says: who may
+	// sign in is the identity provider's call, and OIDCAllowedGroups narrows it further.
+
+	// OIDCIssuer is the provider's issuer URL, e.g. https://id.example.com.
+	OIDCIssuer string `env:"OIDC_ISSUER"`
+	// OIDCClientID and OIDCClientSecret identify this app to the provider. The secret is
+	// secret; leave it empty for a public client (PKCE is always used).
+	OIDCClientID     string `env:"OIDC_CLIENT_ID"`
+	OIDCClientSecret string `env:"OIDC_CLIENT_SECRET"`
+	// OIDCRedirectURL is this app's callback, registered with the provider:
+	// https://<host>/api/auth/oidc/callback.
+	OIDCRedirectURL string `env:"OIDC_REDIRECT_URL"`
+	// OIDCAllowedGroups, if set, admits only members of one of these groups (from the
+	// OIDCGroupsClaim claim; requested with the "groups" scope).
+	OIDCAllowedGroups []string `env:"OIDC_ALLOWED_GROUPS" envSeparator:","`
+	OIDCGroupsClaim   string   `env:"OIDC_GROUPS_CLAIM" envDefault:"groups"`
+	// OIDCName names the provider on the sign-in button.
+	OIDCName string `env:"OIDC_NAME" envDefault:"single sign-on"`
+
 	// MigrateOnStart applies database migrations before serving.
 	MigrateOnStart bool `env:"MIGRATE_ON_START" envDefault:"true"`
 
@@ -73,6 +97,9 @@ type Config struct {
 	WorkerInterval time.Duration `env:"WORKER_INTERVAL" envDefault:"15s"`
 }
 
+// OIDCEnabled reports whether OIDC sign-in is configured.
+func (c Config) OIDCEnabled() bool { return c.OIDCIssuer != "" }
+
 // SearchEnabled reports whether Prowlarr is configured.
 func (c Config) SearchEnabled() bool { return c.ProwlarrURL != "" }
 
@@ -101,6 +128,7 @@ func (c Config) validate() error {
 		errs = append(errs, errors.New("AUTH_RATE_PER_MINUTE must be at least 1"))
 	}
 	errs = append(errs, c.validateIntegrations()...)
+	errs = append(errs, c.validateOIDC()...)
 	if strings.Contains(c.DatabaseURL, "sslmode=disable") && !isLocalDatabase(c.DatabaseURL) {
 		errs = append(errs, errors.New("DATABASE_URL: sslmode=disable is only allowed for localhost"))
 	}
@@ -143,6 +171,50 @@ func (c Config) validateIntegrations() []error {
 		errs = append(errs, errors.New("WORKER_INTERVAL must be between 1s and 1h"))
 	}
 	return errs
+}
+
+func (c Config) validateOIDC() []error {
+	var errs []error
+	if !c.OIDCEnabled() {
+		if c.OIDCClientID != "" || c.OIDCRedirectURL != "" {
+			errs = append(errs, errors.New("OIDC_CLIENT_ID and OIDC_REDIRECT_URL need OIDC_ISSUER"))
+		}
+		if !c.PasswordLogin {
+			errs = append(errs, errors.New("PASSWORD_LOGIN=false needs OIDC sign-in (OIDC_ISSUER)"))
+		}
+		return errs
+	}
+	if c.OIDCClientID == "" || c.OIDCRedirectURL == "" {
+		errs = append(errs, errors.New("OIDC_ISSUER needs OIDC_CLIENT_ID and OIDC_REDIRECT_URL"))
+	}
+	for name, u := range map[string]string{"OIDC_ISSUER": c.OIDCIssuer, "OIDC_REDIRECT_URL": c.OIDCRedirectURL} {
+		if u != "" && !secureURL(u) {
+			errs = append(errs, fmt.Errorf("%s must be an https URL (http only for localhost)", name))
+		}
+	}
+	if c.OIDCRedirectURL != "" && !strings.HasSuffix(c.OIDCRedirectURL, "/api/auth/oidc/callback") {
+		errs = append(errs, errors.New("OIDC_REDIRECT_URL must end in /api/auth/oidc/callback"))
+	}
+	if c.OIDCGroupsClaim == "" {
+		errs = append(errs, errors.New("OIDC_GROUPS_CLAIM must not be empty"))
+	}
+	return errs
+}
+
+// secureURL is an absolute https URL, or http for localhost.
+func secureURL(u string) bool {
+	p, err := url.Parse(u)
+	if err != nil || p.Host == "" {
+		return false
+	}
+	switch p.Scheme {
+	case "https":
+		return true
+	case "http":
+		h := p.Hostname()
+		return h == "localhost" || h == "127.0.0.1" || h == "::1"
+	}
+	return false
 }
 
 func isLocalDatabase(url string) bool {

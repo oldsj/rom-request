@@ -51,6 +51,21 @@ func (e RequestStatus) Valid() bool {
 	}
 }
 
+// AuthMethods defines model for AuthMethods.
+type AuthMethods struct {
+	// Oidc Sign-in through the OIDC provider
+	Oidc bool `json:"oidc"`
+
+	// OidcName The provider's name for the sign-in button
+	OidcName *string `json:"oidcName,omitempty"`
+
+	// Password Email and password sign-in
+	Password bool `json:"password"`
+
+	// Signup Anyone may create a password account
+	Signup bool `json:"signup"`
+}
+
 // Credentials defines model for Credentials.
 type Credentials struct {
 	Email    openapi_types.Email `json:"email"`
@@ -181,6 +196,20 @@ type Unauthorized = Error
 // Unavailable defines model for Unavailable.
 type Unavailable = Error
 
+// OidcCallbackParams defines parameters for OidcCallback.
+type OidcCallbackParams struct {
+	Code  *string `form:"code,omitempty" json:"code,omitempty"`
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+
+	// Error Set by the provider when it didn't sign the user in
+	Error            *string `form:"error,omitempty" json:"error,omitempty"`
+	ErrorDescription *string `form:"error_description,omitempty" json:"error_description,omitempty"`
+	Iss              *string `form:"iss,omitempty" json:"iss,omitempty"`
+
+	// UnderscoreUnderscoreHostOidc The sign-in's state, set by /auth/oidc/login
+	UnderscoreUnderscoreHostOidc *string `form:"__Host-oidc,omitempty" json:"__Host-oidc,omitempty"`
+}
+
 // SearchParams defines parameters for Search.
 type SearchParams struct {
 	Q string `form:"q" json:"q"`
@@ -206,6 +235,15 @@ type ServerInterface interface {
 	// GetMe The signed-in user
 	// (GET /auth/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
+	// GetAuthMethods How this server lets people sign in
+	// (GET /auth/methods)
+	GetAuthMethods(w http.ResponseWriter, r *http.Request)
+	// OidcCallback Finish signing in through the OIDC provider
+	// (GET /auth/oidc/callback)
+	OidcCallback(w http.ResponseWriter, r *http.Request, params OidcCallbackParams)
+	// OidcLogin Start signing in through the OIDC provider
+	// (GET /auth/oidc/login)
+	OidcLogin(w http.ResponseWriter, r *http.Request)
 	// Signup Create an account and sign in
 	// (POST /auth/signup)
 	Signup(w http.ResponseWriter, r *http.Request)
@@ -274,6 +312,134 @@ func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetMe(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAuthMethods operation middleware
+func (siw *ServerInterfaceWrapper) GetAuthMethods(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAuthMethods(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// OidcCallback operation middleware
+func (siw *ServerInterfaceWrapper) OidcCallback(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params OidcCallbackParams
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "code"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "error" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "error", r.URL.Query(), &params.Error, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "error"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "error", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "error_description" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "error_description", r.URL.Query(), &params.ErrorDescription, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "error_description"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "error_description", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "iss" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "iss", r.URL.Query(), &params.Iss, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "iss"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "iss", Err: err})
+		}
+		return
+	}
+
+	{
+		var cookie *http.Cookie
+
+		if cookie, err = r.Cookie("__Host-oidc"); err == nil {
+			var value string
+			err = runtime.BindStyledParameterWithOptions("simple", "__Host-oidc", cookie.Value, &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationCookie, Explode: true, Required: false, Type: "string", Format: ""})
+			if err != nil {
+				siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "__Host-oidc", Err: err})
+				return
+			}
+			params.UnderscoreUnderscoreHostOidc = &value
+
+		}
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.OidcCallback(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// OidcLogin operation middleware
+func (siw *ServerInterfaceWrapper) OidcLogin(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.OidcLogin(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -561,6 +727,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/signup", wrapper.Signup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/login", wrapper.Login)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/logout", wrapper.Logout)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/auth/methods", wrapper.GetAuthMethods)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/auth/oidc/login", wrapper.OidcLogin)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/auth/oidc/callback", wrapper.OidcCallback)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/auth/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/status", wrapper.GetStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/platforms", wrapper.ListPlatforms)
@@ -584,6 +753,14 @@ type ErrorJSONResponse Error
 type ForbiddenJSONResponse Error
 
 type NotFoundJSONResponse Error
+
+type RedirectResponseHeaders struct {
+	Location  string
+	SetCookie *string
+}
+type RedirectResponse struct {
+	Headers RedirectResponseHeaders
+}
 
 type TooManyRequestsJSONResponse Error
 
@@ -647,6 +824,20 @@ func (response Login401JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Login403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response Login403JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -777,6 +968,143 @@ type GetMedefaultJSONResponse struct {
 }
 
 func (response GetMedefaultJSONResponse) VisitGetMeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAuthMethodsRequestObject struct {
+}
+
+type GetAuthMethodsResponseObject interface {
+	VisitGetAuthMethodsResponse(w http.ResponseWriter) error
+}
+
+type GetAuthMethods200JSONResponse AuthMethods
+
+func (response GetAuthMethods200JSONResponse) VisitGetAuthMethodsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAuthMethodsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetAuthMethodsdefaultJSONResponse) VisitGetAuthMethodsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OidcCallbackRequestObject struct {
+	Params OidcCallbackParams
+}
+
+type OidcCallbackResponseObject interface {
+	VisitOidcCallbackResponse(w http.ResponseWriter) error
+}
+
+type OidcCallback302Response = RedirectResponse
+
+func (response OidcCallback302Response) VisitOidcCallbackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(302)
+	return nil
+}
+
+type OidcCallback429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response OidcCallback429JSONResponse) VisitOidcCallbackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OidcCallbackdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response OidcCallbackdefaultJSONResponse) VisitOidcCallbackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OidcLoginRequestObject struct {
+}
+
+type OidcLoginResponseObject interface {
+	VisitOidcLoginResponse(w http.ResponseWriter) error
+}
+
+type OidcLogin302Response = RedirectResponse
+
+func (response OidcLogin302Response) VisitOidcLoginResponse(w http.ResponseWriter) error {
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
+	w.WriteHeader(302)
+	return nil
+}
+
+type OidcLogin429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response OidcLogin429JSONResponse) VisitOidcLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OidcLogindefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response OidcLogindefaultJSONResponse) VisitOidcLoginResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1454,6 +1782,15 @@ type StrictServerInterface interface {
 	// GetMe The signed-in user
 	// (GET /auth/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
+	// GetAuthMethods How this server lets people sign in
+	// (GET /auth/methods)
+	GetAuthMethods(ctx context.Context, request GetAuthMethodsRequestObject) (GetAuthMethodsResponseObject, error)
+	// OidcCallback Finish signing in through the OIDC provider
+	// (GET /auth/oidc/callback)
+	OidcCallback(ctx context.Context, request OidcCallbackRequestObject) (OidcCallbackResponseObject, error)
+	// OidcLogin Start signing in through the OIDC provider
+	// (GET /auth/oidc/login)
+	OidcLogin(ctx context.Context, request OidcLoginRequestObject) (OidcLoginResponseObject, error)
 	// Signup Create an account and sign in
 	// (POST /auth/signup)
 	Signup(ctx context.Context, request SignupRequestObject) (SignupResponseObject, error)
@@ -1591,6 +1928,80 @@ func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetMeResponseObject); ok {
 		if err := validResponse.VisitGetMeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAuthMethods operation middleware
+func (sh *strictHandler) GetAuthMethods(w http.ResponseWriter, r *http.Request) {
+	var request GetAuthMethodsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAuthMethods(ctx, request.(GetAuthMethodsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAuthMethods")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAuthMethodsResponseObject); ok {
+		if err := validResponse.VisitGetAuthMethodsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// OidcCallback operation middleware
+func (sh *strictHandler) OidcCallback(w http.ResponseWriter, r *http.Request, params OidcCallbackParams) {
+	var request OidcCallbackRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.OidcCallback(ctx, request.(OidcCallbackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "OidcCallback")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(OidcCallbackResponseObject); ok {
+		if err := validResponse.VisitOidcCallbackResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// OidcLogin operation middleware
+func (sh *strictHandler) OidcLogin(w http.ResponseWriter, r *http.Request) {
+	var request OidcLoginRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.OidcLogin(ctx, request.(OidcLoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "OidcLogin")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(OidcLoginResponseObject); ok {
+		if err := validResponse.VisitOidcLoginResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -1815,56 +2226,66 @@ func (sh *strictHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"WU5NLLs5u/nXAA==",
+	"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",
+	"CLkshiY6ur24/b8BAA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

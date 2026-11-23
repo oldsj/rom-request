@@ -56,6 +56,28 @@ database:
   # Optional Secret with ca.crt; then PGSSLMODE=verify-full.
   caSecret: ""
 
+# Sign-in. OIDC (for example Pocket ID) is on when oidc.issuer is set. Register a client at the
+# provider with the callback https://<route.hostname>/api/auth/oidc/callback. The pod calls the
+# issuer (discovery, keys, token exchange), so allow it in networkPolicy.extraEgress: the
+# provider's pods if it is in the cluster and you use an internal issuer URL, otherwise the
+# address the issuer's hostname resolves to, on 443.
+auth:
+  # Email and password sign-in. Turn off once OIDC works, to sign in only through the provider.
+  passwordLogin: true
+  oidc:
+    # e.g. https://id.example.com
+    issuer: ""
+    clientId: ""
+    # The provider's name on the sign-in button.
+    name: Pocket ID
+    # Only members of one of these groups may sign in, comma-separated. Empty: anyone the
+    # provider signs in.
+    allowedGroups: ""
+    groupsClaim: groups
+  # The client secret goes in secrets.env (leave it out for a public client):
+  #   - name: OIDC_CLIENT_SECRET
+  #     key: oidc-client-secret
+
 # App secrets beyond the database, as env vars from one existing Secret (made by your secret
 # store). Secret values never go in values. The integrations need:
 #   - name: PROWLARR_API_KEY
