@@ -944,6 +944,58 @@ func (q *Queries) RetryRequest(ctx context.Context, arg RetryRequestParams) (Req
 	return i, err
 }
 
+const searchAgain = `-- name: SearchAgain :one
+UPDATE requests
+SET status = 'searching', title = game_name, indexer = '', size_bytes = 0, info_url = '',
+    download_url = '', magnet_url = '', torrent_hash = '', torrent_ids = '{}', submit_attempts = 0,
+    updated_at = now(), step_started_at = now() - interval '1 day'
+WHERE id = $1 AND status = 'queued' AND game_id IS NOT NULL
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim, game_id, game_name, cover_id, catalog_slug, catalog_name, search_attempts
+`
+
+// Worker: a catalog request whose release link stopped working (indexers' links expire) goes
+// back to searching, at once: step_started_at is set back past the stale wait. Its search
+// attempts carry on counting, so this ends.
+func (q *Queries) SearchAgain(ctx context.Context, id uuid.UUID) (Request, error) {
+	row := q.db.QueryRow(ctx, searchAgain, id)
+	var i Request
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Indexer,
+		&i.SizeBytes,
+		&i.InfoUrl,
+		&i.DownloadUrl,
+		&i.MagnetUrl,
+		&i.TorrentHash,
+		&i.Platform,
+		&i.License,
+		&i.SourceUrl,
+		&i.Status,
+		&i.Progress,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.ImportedPath,
+		&i.ImportedFiles,
+		&i.ImportedSha256,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.StepStartedAt,
+		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
+		&i.GameID,
+		&i.GameName,
+		&i.CoverID,
+		&i.CatalogSlug,
+		&i.CatalogName,
+		&i.SearchAttempts,
+	)
+	return i, err
+}
+
 const setProgress = `-- name: SetProgress :exec
 UPDATE requests
 SET progress = $2, updated_at = now()

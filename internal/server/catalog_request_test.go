@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"github.com/oldsj/rom-request/internal/igdb"
 )
@@ -90,5 +91,31 @@ func TestCatalogRequestNoRelease(t *testing.T) {
 	// Cancelling removes the torrent too.
 	if code, _, _ := r.do("DELETE", "/api/requests/"+id, nil); code != 204 {
 		t.Fatalf("delete: %d", code)
+	}
+}
+
+// An indexer's link expires while the request waits for qBittorrent: the worker searches again.
+func TestCatalogRequestExpiredLink(t *testing.T) {
+	r := catalogRig(t)
+	name := r.prowlarr.addTorrentRelease("Metroid Fusion (USA) [GBA]", "Metroid Fusion (USA).gba", 4)
+	r.qb.setDown(true)
+	_, req, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 2})
+	id := req["id"].(string)
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "queued" {
+		t.Fatalf("qBittorrent down: %v", got)
+	}
+
+	r.prowlarr.expired.Store(name, true)
+	r.qb.setDown(false)
+	r.srv.Worker().SetClock(func() time.Time { return time.Now().Add(2 * time.Hour) }) // past the submit backoff
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "searching" || got["title"] != "Metroid Fusion" {
+		t.Fatalf("expired link: %v", got)
+	}
+	r.prowlarr.expired.Delete(name) // Prowlarr hands out a fresh link
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "downloading" {
+		t.Fatalf("searched again: %v", got)
 	}
 }

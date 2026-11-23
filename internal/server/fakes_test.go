@@ -24,6 +24,7 @@ type fakeProwlarr struct {
 	files    map[string]string // path -> .torrent body
 	magnets  map[string]string // path -> magnet link
 	fetches  atomic.Int32      // download proxy hits
+	expired  sync.Map          // path -> true: the indexer refuses the link (Prowlarr answers 500)
 }
 
 const prowlarrKey = "prowlarr-secret-key"
@@ -44,6 +45,10 @@ func newFakeProwlarr(t *testing.T) *fakeProwlarr {
 	mux.HandleFunc("GET /dl/{name}", func(w http.ResponseWriter, r *http.Request) {
 		f.fetches.Add(1)
 		name := r.PathValue("name")
+		if _, gone := f.expired.Load(name); gone {
+			http.Error(w, "Download selectors didn't match", http.StatusInternalServerError)
+			return
+		}
 		if r.URL.Query().Get("apikey") != prowlarrKey {
 			http.NotFound(w, r)
 			return
