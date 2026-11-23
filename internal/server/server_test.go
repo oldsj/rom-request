@@ -28,7 +28,7 @@ type client struct {
 func newTestServer(t *testing.T, mutate func(*config.Config)) *client {
 	t.Helper()
 	pool := testdb.New(t)
-	cfg := config.Config{AllowSignup: true, SessionTTL: time.Hour, AuthRatePerMinute: 100, LibraryExclude: []string{"bios"}}
+	cfg := config.Config{AllowSignup: true, PasswordLogin: true, SessionTTL: time.Hour, AuthRatePerMinute: 100, LibraryExclude: []string{"bios"}}
 	if mutate != nil {
 		mutate(&cfg)
 	}
@@ -50,7 +50,7 @@ func newTestServer(t *testing.T, mutate func(*config.Config)) *client {
 
 // other is a second, signed-out browser on the same server.
 func (c *client) other() *client {
-	o := &client{t: c.t, base: c.base, http: &http.Client{Transport: c.http.Transport}, srv: c.srv}
+	o := &client{t: c.t, base: c.base, http: &http.Client{Transport: c.http.Transport, CheckRedirect: c.http.CheckRedirect}, srv: c.srv}
 	o.http.Jar, _ = cookiejar.New(nil)
 	return o
 }

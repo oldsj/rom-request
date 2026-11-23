@@ -8,9 +8,20 @@ database:
   cnpg:
     storage:
       size: 10Gi
+auth:
+  passwordLogin: false
+  oidc:
+    issuer: https://id.example.com
+    clientId: rom-request
+    name: Pocket ID
+    allowedGroups: games
+    groupsClaim: groups
+
 secrets:
   existingSecret: rom-request
   env:
+    - name: OIDC_CLIENT_SECRET
+      key: oidc-client-secret
     - name: PROWLARR_API_KEY
       key: prowlarr-api-key
     - name: QBITTORRENT_USERNAME
@@ -64,4 +75,12 @@ networkPolicy:
               app.kubernetes.io/name: qbittorrent
       ports:
         - port: 8080
+          protocol: TCP
+    # Pocket ID, in the cluster (the issuer's hostname resolves to the gateway, so allow that).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+      ports:
+        - port: 443
           protocol: TCP

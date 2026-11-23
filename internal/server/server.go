@@ -20,6 +20,7 @@ import (
 	"github.com/oldsj/rom-request/internal/db/dbq"
 	"github.com/oldsj/rom-request/internal/httpx"
 	"github.com/oldsj/rom-request/internal/library"
+	"github.com/oldsj/rom-request/internal/oidc"
 	"github.com/oldsj/rom-request/internal/prowlarr"
 	"github.com/oldsj/rom-request/internal/qbittorrent"
 	"github.com/oldsj/rom-request/internal/requests"
@@ -41,6 +42,7 @@ type Server struct {
 	search *prowlarr.Client
 	lib    *library.Library
 	reqs   *requests.Service
+	oidc   *oidc.Client
 }
 
 var _ api.StrictServerInterface = (*Server)(nil)
@@ -70,6 +72,12 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 		s.reqs = requests.New(s.q, qb, s.lib, hc, requests.Config{
 			SavePath: cfg.QBittorrentSavePath, DownloadDir: cfg.DownloadDir, Category: cfg.QBittorrentCategory,
 		}, log)
+	}
+	if cfg.OIDCEnabled() {
+		s.oidc = oidc.New(oidc.Config{
+			Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL: cfg.OIDCRedirectURL, GroupsClaim: cfg.OIDCGroupsClaim, WantGroups: len(cfg.OIDCAllowedGroups) > 0,
+		}, &http.Client{Timeout: oidcTimeout})
 	}
 	return s, nil
 }
@@ -165,7 +173,8 @@ func (s *Server) apiHandler() (http.Handler, error) {
 	limitAuth := func(next http.Handler) http.Handler {
 		limited := limiter.Middleware(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/signup") {
+			if (r.Method == http.MethodPost && (r.URL.Path == "/auth/login" || r.URL.Path == "/auth/signup")) ||
+				(r.Method == http.MethodGet && (r.URL.Path == "/auth/oidc/login" || r.URL.Path == "/auth/oidc/callback")) {
 				limited.ServeHTTP(w, r)
 				return
 			}

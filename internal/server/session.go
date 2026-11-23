@@ -85,7 +85,7 @@ func sessionCookie(value string, maxAge int) string {
 	return c.String()
 }
 
-// SweepSessions deletes expired sessions, and expired search results (whose download links
+// SweepSessions deletes expired sessions and unfinished OIDC sign-ins, and expired search results (whose download links
 // carry Prowlarr's API key), every 15 minutes until ctx ends.
 func (s *Server) SweepSessions(ctx context.Context) {
 	t := time.NewTicker(15 * time.Minute)
@@ -99,6 +99,9 @@ func (s *Server) SweepSessions(ctx context.Context) {
 		}
 		if _, err := s.q.DeleteExpiredSearchResults(ctx); err != nil && ctx.Err() == nil {
 			s.log.WarnContext(ctx, "search result sweep", "err", err)
+		}
+		if _, err := s.q.DeleteExpiredOIDCLogins(ctx); err != nil && ctx.Err() == nil {
+			s.log.WarnContext(ctx, "oidc sign-in sweep", "err", err)
 		}
 		select {
 		case <-ctx.Done():

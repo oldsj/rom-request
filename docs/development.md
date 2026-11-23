@@ -27,6 +27,13 @@ Environment only. Secrets have no defaults.
 | `ALLOW_SIGNUP` | `false` | Turn on once to create accounts |
 | `SESSION_TTL` | `720h` | |
 | `AUTH_RATE_PER_MINUTE` | `10` | Sign-in and sign-up attempts per client |
+| `PASSWORD_LOGIN` | `true` | Email and password sign-in; turn off to sign in only through OIDC |
+| `OIDC_ISSUER` | | OIDC provider (e.g. Pocket ID), https; turns OIDC sign-in on |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | The client registered at the provider; the secret is empty for a public client |
+| `OIDC_REDIRECT_URL` | | `https://<host>/api/auth/oidc/callback`, registered at the provider |
+| `OIDC_ALLOWED_GROUPS` | | Comma-separated: only members of one may sign in (asks for the `groups` scope) |
+| `OIDC_GROUPS_CLAIM` | `groups` | The ID token claim listing groups |
+| `OIDC_NAME` | `single sign-on` | The provider's name on the sign-in button |
 | `TRUSTED_PROXIES` | | CIDRs whose `X-Forwarded-For` is believed |
 | `LOG_LEVEL` | `info` | |
 | `PROWLARR_URL`, `PROWLARR_API_KEY` | | Enables search |

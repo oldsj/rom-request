@@ -7,7 +7,8 @@
     "config",
     "database",
     "networkPolicy",
-    "resources"
+    "resources",
+    "auth"
   ],
   "properties": {
     "fullnameOverride": {
@@ -145,6 +146,54 @@
         },
         "caSecret": {
           "type": "string"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passwordLogin",
+        "oidc"
+      ],
+      "properties": {
+        "passwordLogin": {
+          "type": "boolean"
+        },
+        "oidc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "clientId",
+            "name",
+            "allowedGroups",
+            "groupsClaim"
+          ],
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "pattern": "^$|^https://[^\\s/]+"
+            },
+            "clientId": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "allowedGroups": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "groupsClaim": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
         }
       }
     },

@@ -17,7 +17,7 @@ func normalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(
 
 // Signup creates an account and signs it in.
 func (s *Server) Signup(ctx context.Context, req api.SignupRequestObject) (api.SignupResponseObject, error) {
-	if !s.cfg.AllowSignup {
+	if !s.cfg.AllowSignup || !s.cfg.PasswordLogin {
 		return api.Signup403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(apiError("signup_disabled", "Sign-up is turned off."))}, nil
 	}
 	hash, err := auth.HashPassword(req.Body.Password)
@@ -44,9 +44,13 @@ func (s *Server) Signup(ctx context.Context, req api.SignupRequestObject) (api.S
 
 // Login checks the password and starts a new session.
 func (s *Server) Login(ctx context.Context, req api.LoginRequestObject) (api.LoginResponseObject, error) {
+	if !s.cfg.PasswordLogin {
+		return api.Login403JSONResponse{ForbiddenJSONResponse: api.ForbiddenJSONResponse(apiError("password_login_disabled", "Sign in with "+s.cfg.OIDCName+" instead."))}, nil
+	}
 	wrong := api.Login401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(apiError("invalid_credentials", "Wrong email or password."))}
 	user, err := s.q.GetUserByEmail(ctx, normalizeEmail(string(req.Body.Email)))
-	if errors.Is(err, pgx.ErrNoRows) {
+	// An account made through OIDC has no password.
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && user.PasswordHash == "") {
 		auth.BurnTime(req.Body.Password) // same timing whether or not the account exists
 		return wrong, nil
 	}

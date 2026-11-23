@@ -64,8 +64,12 @@ environment variables:
 | `LIBRARY_DIR` | The ROM library, writable; `LIBRARY_EXCLUDE` (default `bios`) lists folders that aren't platforms |
 
 Every integration is optional; the app says what isn't set up. Add `.rom-request` (the import
-staging folder) to RomM's `exclude.platforms`. Sign-up is off by default: start once with
-`ALLOW_SIGNUP=true` to create your account. All settings are in
+staging folder) to RomM's `exclude.platforms`.
+
+To sign in, either use an OIDC provider such as [Pocket ID](https://pocket-id.org) (set
+`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and `OIDC_REDIRECT_URL`, optionally
+`OIDC_ALLOWED_GROUPS`, and `PASSWORD_LOGIN=false` once it works) or start once with
+`ALLOW_SIGNUP=true` to create a password account. All settings are in
 [development and deployment](docs/development.md).
 
 For Kubernetes, the Helm chart is in [`charts/rom-request`](charts/rom-request) and is published
