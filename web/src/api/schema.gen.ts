@@ -174,9 +174,10 @@ export interface paths {
         post?: never;
         /**
          * Remove a request
-         * @description A request that hasn't been imported is cancelled: its torrent and partial download are
-         *     removed from qBittorrent. An imported request's record is removed; the library and the
-         *     downloaded files are left alone. 409 while importing.
+         * @description A request that hasn't been imported is cancelled: its torrent and downloaded files are
+         *     removed from qBittorrent, at once or (while qBittorrent is unreachable) by the worker
+         *     later. An imported request's record is removed; the library and the downloaded files
+         *     are left alone. 409 while importing.
          */
         delete: operations["deleteRequest"];
         options?: never;
@@ -650,7 +651,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
-            502: components["responses"]["BadGateway"];
             default: components["responses"]["Error"];
         };
     };

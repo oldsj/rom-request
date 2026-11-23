@@ -87,13 +87,13 @@ function RequestItem({ request: r, onChanged }: { request: RomRequest; onChanged
       {r.status !== 'importing' && (
         <div className="mt-3 flex flex-wrap gap-2">
           {r.status === 'failed' && (
-            <Button variant="primary" disabled={retry.isPending} onClick={() => { retry.mutate({ params }); }}>
+            <Button variant="primary" disabled={retry.isPending} onClick={() => { remove.reset(); retry.mutate({ params }); }}>
               Retry
             </Button>
           )}
           {confirming ? (
             <>
-              <Button variant="danger" disabled={remove.isPending} onClick={() => { remove.mutate({ params }); }}>
+              <Button variant="danger" disabled={remove.isPending} onClick={() => { retry.reset(); remove.mutate({ params }); }}>
                 {active ? 'Cancel download' : 'Remove request'}
               </Button>
               <Button onClick={() => { setConfirming(false); }}>Keep</Button>
@@ -105,9 +105,9 @@ function RequestItem({ request: r, onChanged }: { request: RomRequest; onChanged
       )}
       {confirming && (
         <p className="text-muted-foreground mt-2 text-sm">
-          {active
-            ? 'This removes the torrent and its partial download from qBittorrent.'
-            : 'This removes the request only. Files in the library stay where they are.'}
+          {r.status === 'imported'
+            ? 'This removes the request only. The game stays in the library, and the torrent keeps seeding.'
+            : 'This removes the request, and its torrent and downloaded files from qBittorrent.'}
         </p>
       )}
     </Panel>

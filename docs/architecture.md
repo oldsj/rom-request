@@ -28,14 +28,18 @@ queued ──▶ downloading ──▶ importing ──▶ imported
 1. **Search.** `GET /api/search` asks Prowlarr, keeps torrent results, stores them for the user,
    and returns them by seeders.
 2. **Request.** `POST /api/requests` takes a result id and a platform (a library folder). The
-   API reads the release (a `.torrent` file or magnet link, following Prowlarr's redirects) to
-   get its info-hash. One live request per torrent.
+   API reads the release through Prowlarr's download proxy (a `.torrent` file, or a redirect to
+   a magnet link) to get its info-hashes. One live request per torrent.
 3. **Submit.** The torrent is added to qBittorrent with save path
    `QBITTORRENT_SAVE_PATH/<request id>`, automatic torrent management off and the
-   `rom-request` tag. The request becomes `downloading`. If qBittorrent is unreachable, the
-   request stays `queued` and the worker submits it later; submitting is idempotent.
-4. **Follow.** Every `WORKER_INTERVAL` the worker reads the active torrents by hash and records
-   progress. A torrent that disappears or errors fails the request.
+   `rom-request` tag. The request becomes `downloading`. If qBittorrent or the indexer is
+   unreachable, the request stays `queued` and the worker tries again with a growing backoff
+   (1 minute to an hour), giving up after ten attempts. Submitting is idempotent: the worker
+   looks for the torrent in qBittorrent before fetching the release again.
+4. **Follow.** Every `WORKER_INTERVAL` the worker reads the active torrents and records
+   progress. A torrent can have two ids (a hybrid v1 + v2 torrent is its v1 hash on libtorrent
+   1.2 builds and its truncated v2 hash on 2.x); the request keeps both. A torrent that errors,
+   or is still missing two minutes after it was added, fails the request.
 5. **Import.** When qBittorrent reports the torrent complete and seeding, the worker claims the
    request (`downloading → importing`) and imports the wanted files (it skips files set to "do
    not download") from `DOWNLOAD_DIR/<request id>`:
@@ -51,8 +55,12 @@ queued ──▶ downloading ──▶ importing ──▶ imported
    up at its next scan.
 
 Each step is an `UPDATE ... WHERE status = ...`, so two replicas never take the same step. An
-import interrupted by a crash is reclaimed after two hours. Removing a request that is still
-downloading deletes its torrent and downloaded files; an imported game stays in the library.
+import holds a claim it renews every 30 seconds; only the holder can finish it. On shutdown an
+import stops and hands its claim back, so the next round starts it again; one whose pod died is
+taken over after five minutes without renewal, and an importer that can't renew stops before
+then. Removing a request that isn't imported deletes its torrent and downloaded files, at once
+or, while qBittorrent is down, from a queue the worker works through; an imported game stays in
+the library.
 
 ## Failures
 
@@ -63,6 +71,7 @@ downloading deletes its torrent and downloaded files; an imported game stays in 
 | `download_incomplete` | Files missing or the wrong size | Recheck the torrent in qBittorrent, retry |
 | `unsafe_path` | A path in the torrent escapes its folder | Don't import this release |
 | `torrent_removed`, `download_failed` | qBittorrent lost or errored the torrent | Retry adds it again |
+| `submit_failed` | qBittorrent or the indexer was unreachable for hours | Retry once they're back |
 | `already_in_qbittorrent` | The torrent exists outside ROM Request's folder | Remove it there, retry |
 | `release_unreadable`, `release_changed`, `qbittorrent_rejected` | The release itself is bad | Pick another release |
 

@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -56,7 +57,7 @@ func TestImportSingleFile(t *testing.T) {
 	f := setup(t)
 	// qBittorrent's "create subfolder" layout: one file still lands as a file.
 	file := write(t, filepath.Join(f.downloads, "req1"), "Homebrew Quest/Homebrew Quest.gba", "rom bytes")
-	res, err := f.l.Import(f.downloads, Job{ID: "req1", SourceDir: "req1", Files: []File{file}, Platform: "GBA"})
+	res, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req1", SourceDir: "req1", Files: []File{file}, Platform: "GBA"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestImportSingleFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.downloads, "req1", "Homebrew Quest", "Homebrew Quest.gba"), []byte("ROM BYTES"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.l.Import(f.downloads, Job{ID: "req2", SourceDir: "req1", Files: []File{file}, Platform: "GBA"}); !errors.Is(err, ErrConflict) {
+	if _, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req2", SourceDir: "req1", Files: []File{file}, Platform: "GBA"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second import: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(f.lib, "GBA", "Homebrew Quest.gba")); string(b) != "rom bytes" {
@@ -95,7 +96,7 @@ func TestImportMultiFile(t *testing.T) {
 		write(t, src, "Disc Game/Disc Game.bin", "bin data"),
 		write(t, src, "Disc Game/LICENSE.txt", "CC BY 4.0"),
 	}
-	res, err := f.l.Import(f.downloads, Job{ID: "req", SourceDir: "req", Files: files, Platform: "PS1"})
+	res, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req", SourceDir: "req", Files: files, Platform: "PS1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestImportMultiFile(t *testing.T) {
 	// Files with no common folder go under the release title.
 	src2 := filepath.Join(f.downloads, "loose")
 	loose := []File{write(t, src2, "a.gba", "a"), write(t, src2, "readme.txt", "r")}
-	res, err = f.l.Import(f.downloads, Job{ID: "loose", SourceDir: "loose", Files: loose, Platform: "GBA", Title: "Two: Pack/Set"})
+	res, err = f.l.Import(t.Context(), f.downloads, Job{ID: "loose", SourceDir: "loose", Files: loose, Platform: "GBA", Title: "Two: Pack/Set"})
 	if err != nil || res.Path != "GBA/Two_ Pack_Set" {
 		t.Fatalf("loose: %+v %v", res, err)
 	}
@@ -129,7 +130,7 @@ func TestImportRefusesUnsafeAndIncomplete(t *testing.T) {
 		"source traversal": {ID: "r", SourceDir: "..", Files: []File{good}, Platform: "GBA"},
 	}
 	for name, job := range cases {
-		if _, err := f.l.Import(f.downloads, job); err == nil {
+		if _, err := f.l.Import(t.Context(), f.downloads, job); err == nil {
 			t.Errorf("%s: imported", name)
 		}
 	}
@@ -142,7 +143,7 @@ func TestImportRefusesUnsafeAndIncomplete(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(f.downloads, "r", "link.gba")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.l.Import(f.downloads, Job{ID: "r", SourceDir: "r", Files: []File{{Name: "link.gba", Size: 6}}, Platform: "GBA"}); err == nil {
+	if _, err := f.l.Import(t.Context(), f.downloads, Job{ID: "r", SourceDir: "r", Files: []File{{Name: "link.gba", Size: 6}}, Platform: "GBA"}); err == nil {
 		t.Error("symlink escaping the downloads was followed")
 	}
 	if _, err := os.Stat(filepath.Join(f.lib, "GBA", "link.gba")); err == nil {
@@ -159,5 +160,21 @@ func TestFolderName(t *testing.T) {
 	long := folderName(string(make([]rune, 0)) + "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé")
 	if len(long) > 120 {
 		t.Errorf("long name %d bytes", len(long))
+	}
+}
+
+func TestImportCancelled(t *testing.T) {
+	f := setup(t)
+	file := write(t, filepath.Join(f.downloads, "req"), "Game.gba", "rom bytes")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := f.l.Import(ctx, f.downloads, Job{ID: "req", SourceDir: "req", Files: []File{file}, Platform: "GBA"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.lib, "GBA")); len(entries) != 0 {
+		t.Errorf("library changed: %v", entries)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.lib, StagingDir)); len(entries) != 0 {
+		t.Errorf("staging left behind: %v", entries)
 	}
 }

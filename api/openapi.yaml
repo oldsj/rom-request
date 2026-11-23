@@ -276,9 +276,10 @@ paths:
       operationId: deleteRequest
       summary: Remove a request
       description: |
-        A request that hasn't been imported is cancelled: its torrent and partial download are
-        removed from qBittorrent. An imported request's record is removed; the library and the
-        downloaded files are left alone. 409 while importing.
+        A request that hasn't been imported is cancelled: its torrent and downloaded files are
+        removed from qBittorrent, at once or (while qBittorrent is unreachable) by the worker
+        later. An imported request's record is removed; the library and the downloaded files
+        are left alone. 409 while importing.
       tags: [requests]
       responses:
         '204':
@@ -289,8 +290,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '502':
-          $ref: '#/components/responses/BadGateway'
         default:
           $ref: '#/components/responses/Error'
 

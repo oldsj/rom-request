@@ -25,6 +25,26 @@ type Torrent struct {
 	Progress float64 `json:"progress"`
 	SavePath string  `json:"save_path"`
 	Size     int64   `json:"size"`
+	// The torrent's v1 and v2 info-hashes (qBittorrent 4.4+). Hash is one of them: on
+	// libtorrent 2.x builds the truncated v2 hash whenever there is one.
+	InfohashV1 string `json:"infohash_v1"`
+	InfohashV2 string `json:"infohash_v2"`
+}
+
+// Matches reports whether the torrent is known by any of ids (lower-case hex, 40 characters).
+func (t Torrent) Matches(ids []string) bool {
+	v2 := t.InfohashV2
+	if len(v2) > 40 {
+		v2 = v2[:40]
+	}
+	for _, id := range ids {
+		for _, h := range []string{t.Hash, t.InfohashV1, v2} {
+			if h != "" && strings.EqualFold(h, id) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // File is one file of a torrent, from /torrents/files. Name is relative to the save path and
@@ -187,7 +207,8 @@ func (c *Client) Add(ctx context.Context, a Add) error {
 	}
 	text := strings.TrimSpace(string(data))
 	switch {
-	case status == http.StatusUnsupportedMediaType || text == "Fails.":
+	// Up to 5.1 a refusal is "Fails."; from 5.2 it is 409 Conflict (415 for an unreadable file).
+	case status == http.StatusConflict || status == http.StatusUnsupportedMediaType || text == "Fails.":
 		return ErrRejected
 	case status != http.StatusOK && status != http.StatusAccepted:
 		return fmt.Errorf("qbittorrent: add: status %d", status)

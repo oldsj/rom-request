@@ -35,6 +35,20 @@ func TestID(t *testing.T) {
 	}
 }
 
+func TestIdentifyHybrid(t *testing.T) {
+	hybrid := "d12:meta versioni2e4:name8:game.gba12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaae"
+	src, err := Identify([]byte("d4:info" + hybrid + "e"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := sha1.Sum([]byte(hybrid)) //nolint:gosec // see import
+	v2 := sha256.Sum256([]byte(hybrid))
+	want := []string{hex.EncodeToString(v1[:]), hex.EncodeToString(v2[:20])}
+	if src.Hash != want[0] || len(src.IDs) != 2 || src.IDs[0] != want[0] || src.IDs[1] != want[1] {
+		t.Errorf("hybrid = %+v, want hash %s and ids %v", src, want[0], want)
+	}
+}
+
 func TestIDRejectsGarbage(t *testing.T) {
 	for _, b := range []string{"", "le", "d4:infoi1ee", "d4:info", "d3:fooi1ee", "d9999999999:x", "d4:infod" + "e"[:0]} {
 		if _, err := ID([]byte(b)); !errors.Is(err, ErrInvalid) {
@@ -60,6 +74,11 @@ func TestMagnetID(t *testing.T) {
 	if got, err := MagnetID("magnet:?xt=urn:btmh:" + v2); err != nil || got != hexHash {
 		t.Errorf("btmh = %q, %v", got, err)
 	}
+	other := "00112233445566778899aabbccddeeff00112233"
+	both, err := ParseMagnet("magnet:?xt=urn:btih:" + hexHash + "&xt=urn:btmh:1220" + other + hexHash[:24])
+	if err != nil || both.Hash != hexHash || len(both.IDs) != 2 || both.IDs[1] != other {
+		t.Errorf("hybrid magnet = %+v, %v", both, err)
+	}
 	for _, m := range []string{"http://example.com", "magnet:?dn=x", "magnet:?xt=urn:btih:zz"} {
 		if _, err := MagnetID(m); !errors.Is(err, ErrInvalid) {
 			t.Errorf("MagnetID(%q) err = %v", m, err)
@@ -77,6 +96,8 @@ func TestResolve(t *testing.T) {
 		w.Header().Set("Location", magnet)
 		w.WriteHeader(http.StatusMovedPermanently)
 	})
+	mux.HandleFunc("/gone", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusGone) })
+	mux.HandleFunc("/busy", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
 	mux.HandleFunc("/ftp", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "ftp://elsewhere/x")
 		w.WriteHeader(http.StatusFound)
@@ -99,7 +120,20 @@ func TestResolve(t *testing.T) {
 	if _, err := Resolve(ctx, srv.Client(), "", srv.URL+"/ftp"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("ftp redirect: %v", err)
 	}
-	if _, err := Resolve(ctx, srv.Client(), "", srv.URL+"/missing"); err == nil {
-		t.Error("404 accepted")
+	// Prowlarr's search API gives magnet links as http links to its proxy.
+	if s, err := Resolve(ctx, srv.Client(), srv.URL+"/magnet", ""); err != nil || s.Magnet != magnet {
+		t.Fatalf("proxied magnet link: %+v %v", s, err)
+	}
+	if s, err := Resolve(ctx, srv.Client(), srv.URL+"/magnet", srv.URL+"/file"); err != nil || string(s.File) != file {
+		t.Fatalf("proxied magnet with a download link: %+v %v", s, err)
+	}
+	// Gone is final; busy may pass.
+	for _, p := range []string{"/missing", "/gone"} {
+		if _, err := Resolve(ctx, srv.Client(), "", srv.URL+p); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", p, err)
+		}
+	}
+	if _, err := Resolve(ctx, srv.Client(), "", srv.URL+"/busy"); err == nil || errors.Is(err, ErrInvalid) {
+		t.Errorf("429: %v", err)
 	}
 }

@@ -59,12 +59,20 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		go srv.SweepSessions(ctx)
+		worker := make(chan struct{})
 		if w := srv.Worker(); w != nil {
-			go w.Run(ctx, cfg.WorkerInterval)
+			go func() {
+				defer close(worker)
+				w.Run(ctx, cfg.WorkerInterval)
+			}()
 		} else {
+			close(worker)
 			log.Info("downloads not configured: no request worker")
 		}
-		return server.Serve(ctx, log, cfg.ListenAddr, h, srv.Drain)
+		err = server.Serve(ctx, log, cfg.ListenAddr, h, srv.Drain)
+		// An import in progress gives its claim back before the process (and the pool) goes.
+		<-worker
+		return err
 	default:
 		return fmt.Errorf("unknown command %q (want serve or migrate)", cmd)
 	}

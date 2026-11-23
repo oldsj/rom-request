@@ -13,7 +13,7 @@ import (
 )
 
 const activeRequests = `-- name: ActiveRequests :many
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at FROM requests
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests
 WHERE status IN ('queued', 'downloading', 'importing')
 ORDER BY created_at
 LIMIT 200
@@ -53,6 +53,9 @@ func (q *Queries) ActiveRequests(ctx context.Context) ([]Request, error) {
 			&i.UpdatedAt,
 			&i.StepStartedAt,
 			&i.ImportedAt,
+			&i.TorrentIds,
+			&i.SubmitAttempts,
+			&i.ImportClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -66,22 +69,24 @@ func (q *Queries) ActiveRequests(ctx context.Context) ([]Request, error) {
 
 const claimImport = `-- name: ClaimImport :one
 UPDATE requests
-SET status = 'importing', progress = 1, updated_at = now(), step_started_at = now()
-WHERE id = $1
+SET status = 'importing', progress = 1, import_claim = $1, updated_at = now(),
+    step_started_at = now()
+WHERE id = $2
   AND (status = 'downloading'
-       OR (status = 'importing' AND step_started_at < now() - $2::interval))
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at
+       OR (status = 'importing' AND step_started_at < now() - $3::interval))
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
 `
 
 type ClaimImportParams struct {
+	Claim pgtype.UUID
 	ID    uuid.UUID
 	Stale pgtype.Interval
 }
 
-// Worker: take the import step. Only one pod wins a downloading request; an import left
-// behind by a crashed pod is reclaimed after `stale`.
+// Worker: take the import step with a new claim. Only one pod wins a downloading request; an
+// import whose holder stopped renewing it (crashed) is taken over after `stale`.
 func (q *Queries) ClaimImport(ctx context.Context, arg ClaimImportParams) (Request, error) {
-	row := q.db.QueryRow(ctx, claimImport, arg.ID, arg.Stale)
+	row := q.db.QueryRow(ctx, claimImport, arg.Claim, arg.ID, arg.Stale)
 	var i Request
 	err := row.Scan(
 		&i.ID,
@@ -107,6 +112,9 @@ func (q *Queries) ClaimImport(ctx context.Context, arg ClaimImportParams) (Reque
 		&i.UpdatedAt,
 		&i.StepStartedAt,
 		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
 	)
 	return i, err
 }
@@ -114,9 +122,9 @@ func (q *Queries) ClaimImport(ctx context.Context, arg ClaimImportParams) (Reque
 const createRequest = `-- name: CreateRequest :one
 INSERT INTO requests (
     user_id, title, indexer, size_bytes, info_url, download_url, magnet_url,
-    torrent_hash, platform, license, source_url
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at
+    torrent_hash, torrent_ids, platform, license, source_url
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
 `
 
 type CreateRequestParams struct {
@@ -128,6 +136,7 @@ type CreateRequestParams struct {
 	DownloadUrl string
 	MagnetUrl   string
 	TorrentHash string
+	TorrentIds  []string
 	Platform    string
 	License     string
 	SourceUrl   string
@@ -143,6 +152,7 @@ func (q *Queries) CreateRequest(ctx context.Context, arg CreateRequestParams) (R
 		arg.DownloadUrl,
 		arg.MagnetUrl,
 		arg.TorrentHash,
+		arg.TorrentIds,
 		arg.Platform,
 		arg.License,
 		arg.SourceUrl,
@@ -172,55 +182,53 @@ func (q *Queries) CreateRequest(ctx context.Context, arg CreateRequestParams) (R
 		&i.UpdatedAt,
 		&i.StepStartedAt,
 		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
 	)
 	return i, err
 }
 
-const deleteRequest = `-- name: DeleteRequest :one
-DELETE FROM requests
-WHERE id = $1 AND user_id = $2 AND status <> 'importing'
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at
+const deleteTorrentRemoval = `-- name: DeleteTorrentRemoval :exec
+DELETE FROM torrent_removals WHERE id = $1
 `
 
-type DeleteRequestParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+// Worker.
+func (q *Queries) DeleteTorrentRemoval(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTorrentRemoval, id)
+	return err
 }
 
-// Not while importing: the worker owns that step until it ends.
-func (q *Queries) DeleteRequest(ctx context.Context, arg DeleteRequestParams) (Request, error) {
-	row := q.db.QueryRow(ctx, deleteRequest, arg.ID, arg.UserID)
-	var i Request
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Title,
-		&i.Indexer,
-		&i.SizeBytes,
-		&i.InfoUrl,
-		&i.DownloadUrl,
-		&i.MagnetUrl,
-		&i.TorrentHash,
-		&i.Platform,
-		&i.License,
-		&i.SourceUrl,
-		&i.Status,
-		&i.Progress,
-		&i.ErrorCode,
-		&i.ErrorMessage,
-		&i.ImportedPath,
-		&i.ImportedFiles,
-		&i.ImportedSha256,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.StepStartedAt,
-		&i.ImportedAt,
+const failImport = `-- name: FailImport :execrows
+UPDATE requests
+SET status = 'failed', error_code = $3, error_message = $4, import_claim = NULL,
+    updated_at = now(), step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing'
+`
+
+type FailImportParams struct {
+	ID           uuid.UUID
+	ImportClaim  pgtype.UUID
+	ErrorCode    string
+	ErrorMessage string
+}
+
+// Worker, holding the claim.
+func (q *Queries) FailImport(ctx context.Context, arg FailImportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failImport,
+		arg.ID,
+		arg.ImportClaim,
+		arg.ErrorCode,
+		arg.ErrorMessage,
 	)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getRequest = `-- name: GetRequest :one
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at FROM requests WHERE id = $1 AND user_id = $2
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests WHERE id = $1 AND user_id = $2
 `
 
 type GetRequestParams struct {
@@ -255,13 +263,32 @@ func (q *Queries) GetRequest(ctx context.Context, arg GetRequestParams) (Request
 		&i.UpdatedAt,
 		&i.StepStartedAt,
 		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
+	)
+	return i, err
+}
+
+const getTorrentRemoval = `-- name: GetTorrentRemoval :one
+SELECT id, torrent_ids, save_path, created_at FROM torrent_removals WHERE id = $1
+`
+
+func (q *Queries) GetTorrentRemoval(ctx context.Context, id uuid.UUID) (TorrentRemoval, error) {
+	row := q.db.QueryRow(ctx, getTorrentRemoval, id)
+	var i TorrentRemoval
+	err := row.Scan(
+		&i.ID,
+		&i.TorrentIds,
+		&i.SavePath,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listRequests = `-- name: ListRequests :many
 
-SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at FROM requests
+SELECT id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim FROM requests
 WHERE user_id = $1
 ORDER BY created_at DESC
 LIMIT 500
@@ -302,6 +329,9 @@ func (q *Queries) ListRequests(ctx context.Context, userID uuid.UUID) ([]Request
 			&i.UpdatedAt,
 			&i.StepStartedAt,
 			&i.ImportedAt,
+			&i.TorrentIds,
+			&i.SubmitAttempts,
+			&i.ImportClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -313,65 +343,83 @@ func (q *Queries) ListRequests(ctx context.Context, userID uuid.UUID) ([]Request
 	return items, nil
 }
 
-const markFailed = `-- name: MarkFailed :exec
+const markFailed = `-- name: MarkFailed :execrows
 UPDATE requests
 SET status = 'failed', error_code = $2, error_message = $3, updated_at = now(),
     step_started_at = now()
-WHERE id = $1 AND status IN ('queued', 'downloading', 'importing')
+WHERE id = $1 AND status = $4 AND status IN ('queued', 'downloading')
 `
 
 type MarkFailedParams struct {
 	ID           uuid.UUID
 	ErrorCode    string
 	ErrorMessage string
+	Status       RequestStatus
 }
 
-// Worker and handler: any live step -> failed, with a reason the user can act on.
-func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) error {
-	_, err := q.db.Exec(ctx, markFailed, arg.ID, arg.ErrorCode, arg.ErrorMessage)
-	return err
+// Worker and handler: a queued or downloading request -> failed, from the status the caller
+// saw, with a reason the user can act on.
+func (q *Queries) MarkFailed(ctx context.Context, arg MarkFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markFailed,
+		arg.ID,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.Status,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const markImported = `-- name: MarkImported :exec
+const markImported = `-- name: MarkImported :execrows
 UPDATE requests
-SET status = 'imported', imported_path = $2, imported_files = $3, imported_sha256 = $4,
+SET status = 'imported', imported_path = $3, imported_files = $4, imported_sha256 = $5,
+    import_claim = NULL, download_url = '', magnet_url = '',
     imported_at = now(), updated_at = now(), step_started_at = now()
-WHERE id = $1 AND status = 'importing'
+WHERE id = $1 AND import_claim = $2 AND status = 'importing'
 `
 
 type MarkImportedParams struct {
 	ID             uuid.UUID
+	ImportClaim    pgtype.UUID
 	ImportedPath   string
 	ImportedFiles  int32
 	ImportedSha256 string
 }
 
-// Worker.
-func (q *Queries) MarkImported(ctx context.Context, arg MarkImportedParams) error {
-	_, err := q.db.Exec(ctx, markImported,
+// Worker, holding the claim. Prowlarr's links (which carry its key) aren't needed any more.
+func (q *Queries) MarkImported(ctx context.Context, arg MarkImportedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markImported,
 		arg.ID,
+		arg.ImportClaim,
 		arg.ImportedPath,
 		arg.ImportedFiles,
 		arg.ImportedSha256,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markSubmitted = `-- name: MarkSubmitted :one
 UPDATE requests
-SET status = 'downloading', torrent_hash = $2, updated_at = now(), step_started_at = now()
+SET status = 'downloading', torrent_hash = $2, torrent_ids = $3, updated_at = now(),
+    step_started_at = now()
 WHERE id = $1 AND status = 'queued'
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
 `
 
 type MarkSubmittedParams struct {
 	ID          uuid.UUID
 	TorrentHash string
+	TorrentIds  []string
 }
 
 // Worker and handler: queued -> downloading, once qBittorrent has the torrent.
 func (q *Queries) MarkSubmitted(ctx context.Context, arg MarkSubmittedParams) (Request, error) {
-	row := q.db.QueryRow(ctx, markSubmitted, arg.ID, arg.TorrentHash)
+	row := q.db.QueryRow(ctx, markSubmitted, arg.ID, arg.TorrentHash, arg.TorrentIds)
 	var i Request
 	err := row.Scan(
 		&i.ID,
@@ -397,8 +445,126 @@ func (q *Queries) MarkSubmitted(ctx context.Context, arg MarkSubmittedParams) (R
 		&i.UpdatedAt,
 		&i.StepStartedAt,
 		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
 	)
 	return i, err
+}
+
+const noteSubmitAttempt = `-- name: NoteSubmitAttempt :one
+UPDATE requests
+SET submit_attempts = submit_attempts + 1, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND status = 'queued'
+RETURNING submit_attempts
+`
+
+// Worker: a submit failed for a reason that may pass; try again after a backoff.
+func (q *Queries) NoteSubmitAttempt(ctx context.Context, id uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, noteSubmitAttempt, id)
+	var submit_attempts int32
+	err := row.Scan(&submit_attempts)
+	return submit_attempts, err
+}
+
+const queueTorrentRemoval = `-- name: QueueTorrentRemoval :one
+INSERT INTO torrent_removals (torrent_ids, save_path) VALUES ($1, $2) RETURNING id, torrent_ids, save_path, created_at
+`
+
+type QueueTorrentRemovalParams struct {
+	TorrentIds []string
+	SavePath   string
+}
+
+// Worker: a torrent added for a request that was removed meanwhile.
+func (q *Queries) QueueTorrentRemoval(ctx context.Context, arg QueueTorrentRemovalParams) (TorrentRemoval, error) {
+	row := q.db.QueryRow(ctx, queueTorrentRemoval, arg.TorrentIds, arg.SavePath)
+	var i TorrentRemoval
+	err := row.Scan(
+		&i.ID,
+		&i.TorrentIds,
+		&i.SavePath,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const releaseImport = `-- name: ReleaseImport :execrows
+UPDATE requests
+SET status = 'downloading', import_claim = NULL, updated_at = now(), step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing'
+`
+
+type ReleaseImportParams struct {
+	ID          uuid.UUID
+	ImportClaim pgtype.UUID
+}
+
+// Worker: give an unfinished import back (shutting down); the next round imports again.
+func (q *Queries) ReleaseImport(ctx context.Context, arg ReleaseImportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseImport, arg.ID, arg.ImportClaim)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const removeRequest = `-- name: RemoveRequest :one
+WITH removed AS (
+    DELETE FROM requests
+    WHERE requests.id = $1 AND requests.user_id = $2
+      AND requests.status <> 'importing'
+    RETURNING requests.id, requests.status, requests.torrent_ids
+), queued AS (
+    INSERT INTO torrent_removals (torrent_ids, save_path)
+    SELECT removed.torrent_ids, $3::text FROM removed
+    WHERE removed.status <> 'imported' AND cardinality(removed.torrent_ids) > 0
+    RETURNING torrent_removals.id
+)
+SELECT removed.id,
+       COALESCE((SELECT queued.id FROM queued), '00000000-0000-0000-0000-000000000000')::uuid AS removal_id
+FROM removed
+`
+
+type RemoveRequestParams struct {
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	SavePath string
+}
+
+type RemoveRequestRow struct {
+	ID        uuid.UUID
+	RemovalID uuid.UUID
+}
+
+// Handler: delete a request (not while importing: the worker owns that step) and, unless it
+// was imported, queue its torrent for removal from qBittorrent. One statement, so a request
+// is never deleted without its cleanup.
+// removal_id is the nil uuid when nothing was queued.
+func (q *Queries) RemoveRequest(ctx context.Context, arg RemoveRequestParams) (RemoveRequestRow, error) {
+	row := q.db.QueryRow(ctx, removeRequest, arg.ID, arg.UserID, arg.SavePath)
+	var i RemoveRequestRow
+	err := row.Scan(&i.ID, &i.RemovalID)
+	return i, err
+}
+
+const renewImport = `-- name: RenewImport :execrows
+UPDATE requests SET step_started_at = now()
+WHERE id = $1 AND import_claim = $2 AND status = 'importing'
+`
+
+type RenewImportParams struct {
+	ID          uuid.UUID
+	ImportClaim pgtype.UUID
+}
+
+// Worker: the holder is still importing. No rows: the claim was lost.
+func (q *Queries) RenewImport(ctx context.Context, arg RenewImportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renewImport, arg.ID, arg.ImportClaim)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const requestForTorrent = `-- name: RequestForTorrent :one
@@ -423,10 +589,10 @@ func (q *Queries) RequestForTorrent(ctx context.Context, torrentHash string) (Re
 
 const retryRequest = `-- name: RetryRequest :one
 UPDATE requests
-SET status = 'queued', error_code = '', error_message = '', progress = 0,
+SET status = 'queued', error_code = '', error_message = '', progress = 0, submit_attempts = 0,
     updated_at = now(), step_started_at = now()
 WHERE id = $1 AND user_id = $2 AND status = 'failed'
-RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at
+RETURNING id, user_id, title, indexer, size_bytes, info_url, download_url, magnet_url, torrent_hash, platform, license, source_url, status, progress, error_code, error_message, imported_path, imported_files, imported_sha256, created_at, updated_at, step_started_at, imported_at, torrent_ids, submit_attempts, import_claim
 `
 
 type RetryRequestParams struct {
@@ -462,6 +628,9 @@ func (q *Queries) RetryRequest(ctx context.Context, arg RetryRequestParams) (Req
 		&i.UpdatedAt,
 		&i.StepStartedAt,
 		&i.ImportedAt,
+		&i.TorrentIds,
+		&i.SubmitAttempts,
+		&i.ImportClaim,
 	)
 	return i, err
 }
@@ -481,4 +650,34 @@ type SetProgressParams struct {
 func (q *Queries) SetProgress(ctx context.Context, arg SetProgressParams) error {
 	_, err := q.db.Exec(ctx, setProgress, arg.ID, arg.Progress)
 	return err
+}
+
+const torrentRemovals = `-- name: TorrentRemovals :many
+SELECT id, torrent_ids, save_path, created_at FROM torrent_removals ORDER BY created_at LIMIT 100
+`
+
+// Worker.
+func (q *Queries) TorrentRemovals(ctx context.Context) ([]TorrentRemoval, error) {
+	rows, err := q.db.Query(ctx, torrentRemovals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TorrentRemoval{}
+	for rows.Next() {
+		var i TorrentRemoval
+		if err := rows.Scan(
+			&i.ID,
+			&i.TorrentIds,
+			&i.SavePath,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

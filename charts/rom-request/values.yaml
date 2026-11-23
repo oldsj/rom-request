@@ -86,6 +86,15 @@ integrations:
   libraryExclude: bios
   workerInterval: 15s
 
+# The pod's user and groups. The library must be writable by them: on NFS, match the owner
+# of the share (or add its group to supplementalGroups). fsGroup is applied to volumes that
+# support it (not NFS).
+podSecurity:
+  runAsUser: 65532
+  runAsGroup: 65532
+  supplementalGroups: []
+  fsGroup: null
+
 # The two folders the importer works with, as volume sources (nfs, persistentVolumeClaim, ...).
 # Both must be shared by every replica, so ReadWriteMany storage or NFS.
 storage:

@@ -54,21 +54,47 @@ func TestSignsInAgainWhenSessionExpires(t *testing.T) {
 }
 
 func TestAddResponses(t *testing.T) {
-	var answer atomic.Value
+	type answer struct {
+		status int
+		body   string
+	}
+	var current atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, answer.Load().(string))
+		a := current.Load().(answer)
+		w.WriteHeader(a.status)
+		_, _ = io.WriteString(w, a.body)
 	}))
 	defer srv.Close()
 	c, _ := New(srv.URL, "", "", srv.Client())
-	for body, want := range map[string]error{
-		"Ok.":    nil,
-		"Fails.": ErrRejected,
-		`{"success_count":1,"failure_count":0,"pending_count":0}`: nil,
-		`{"success_count":0,"failure_count":1,"pending_count":0}`: ErrRejected,
+	for _, tc := range []struct {
+		answer
+		want error
+	}{
+		{answer{200, "Ok."}, nil},
+		{answer{200, "Fails."}, ErrRejected},
+		{answer{200, `{"success_count":1,"failure_count":0,"pending_count":0}`}, nil},
+		{answer{200, `{"success_count":0,"failure_count":1,"pending_count":0}`}, ErrRejected},
+		// qBittorrent 5.2+: a refused or duplicate add is 409.
+		{answer{409, `{"success_count":0,"failure_count":1,"pending_count":0}`}, ErrRejected},
+		{answer{415, "Torrent file is not valid"}, ErrRejected},
 	} {
-		answer.Store(body)
-		if err := c.Add(t.Context(), Add{Magnet: "magnet:?xt=urn:btih:x", SavePath: "/d"}); !errors.Is(err, want) {
-			t.Errorf("%s: %v", body, err)
+		current.Store(tc.answer)
+		if err := c.Add(t.Context(), Add{Magnet: "magnet:?xt=urn:btih:x", SavePath: "/d"}); !errors.Is(err, tc.want) {
+			t.Errorf("%d %s: %v", tc.status, tc.body, err)
 		}
+	}
+	current.Store(answer{500, "boom"})
+	if err := c.Add(t.Context(), Add{Magnet: "magnet:?xt=urn:btih:x", SavePath: "/d"}); err == nil || errors.Is(err, ErrRejected) {
+		t.Errorf("500: %v", err)
+	}
+}
+
+func TestMatches(t *testing.T) {
+	v1 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	v2 := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	// A hybrid on libtorrent 2.x: its id is the truncated v2 hash.
+	tor := Torrent{Hash: v2[:40], InfohashV1: v1, InfohashV2: v2}
+	if !tor.Matches([]string{v1}) || !tor.Matches([]string{"x", v2[:40]}) || tor.Matches([]string{"c"}) {
+		t.Errorf("Matches wrong for %+v", tor)
 	}
 }

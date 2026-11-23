@@ -19,7 +19,10 @@ export function SearchPage() {
 
   function onSearch(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
-    setQuery(field(new FormData(e.currentTarget), 'q').trim());
+    const q = field(new FormData(e.currentTarget), 'q').trim();
+    // The same query again (say, after an error or an expired result) searches again.
+    if (q === query) void results.refetch();
+    else setQuery(q);
   }
 
   const canRequest = status.data?.qbittorrent === true;

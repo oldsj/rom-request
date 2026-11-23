@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/oldsj/rom-request/internal/qbittorrent"
@@ -20,13 +22,15 @@ type fakeProwlarr struct {
 	*httptest.Server
 	releases []map[string]any
 	files    map[string]string // path -> .torrent body
+	magnets  map[string]string // path -> magnet link
+	fetches  atomic.Int32      // download proxy hits
 }
 
 const prowlarrKey = "prowlarr-secret-key"
 
 func newFakeProwlarr(t *testing.T) *fakeProwlarr {
 	t.Helper()
-	f := &fakeProwlarr{files: map[string]string{}}
+	f := &fakeProwlarr{files: map[string]string{}, magnets: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Api-Key") != prowlarrKey {
@@ -35,9 +39,22 @@ func newFakeProwlarr(t *testing.T) *fakeProwlarr {
 		}
 		_ = json.NewEncoder(w).Encode(f.releases)
 	})
+	// Prowlarr's download proxy: the .torrent file, or a redirect to the magnet link. Its search
+	// API gives both download and magnet links as links to it.
 	mux.HandleFunc("GET /dl/{name}", func(w http.ResponseWriter, r *http.Request) {
-		body, ok := f.files[r.PathValue("name")]
-		if !ok || r.URL.Query().Get("apikey") != prowlarrKey {
+		f.fetches.Add(1)
+		name := r.PathValue("name")
+		if r.URL.Query().Get("apikey") != prowlarrKey {
+			http.NotFound(w, r)
+			return
+		}
+		if m, ok := f.magnets[name]; ok {
+			w.Header().Set("Location", m)
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
+		body, ok := f.files[name]
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
@@ -48,36 +65,60 @@ func newFakeProwlarr(t *testing.T) *fakeProwlarr {
 	return f
 }
 
-// addTorrentRelease adds a release whose download link serves a single-file torrent.
-func (f *fakeProwlarr) addTorrentRelease(title, file string, size int) {
-	name := fmt.Sprintf("t%d", len(f.files))
+// addTorrentRelease adds a release whose download link serves a single-file v1 torrent.
+func (f *fakeProwlarr) addTorrentRelease(title, file string, size int) string {
 	info := fmt.Sprintf("d6:lengthi%de4:name%d:%s12:piece lengthi16384e6:pieces20:%se", size, len(file), file, strings.Repeat("x", 20))
-	f.files[name] = "d4:info" + info + "e"
-	f.releases = append(f.releases, map[string]any{
-		"guid": name, "title": title, "indexer": "Homebrew Hub", "size": size, "seeders": 5,
-		"protocol": "torrent", "infoUrl": "https://example.com/" + name,
-		"downloadUrl": f.URL + "/dl/" + name + "?apikey=" + prowlarrKey,
-		"categories":  []map[string]any{{"id": 1000, "name": "Console"}},
-	})
+	return f.addFile(title, info)
 }
 
-func (f *fakeProwlarr) addMagnetRelease(title, hash string) {
+// addHybridRelease adds a release whose download link serves a hybrid (v1 + v2) torrent.
+func (f *fakeProwlarr) addHybridRelease(title, file string, size int) string {
+	info := fmt.Sprintf("d6:lengthi%de12:meta versioni2e4:name%d:%s12:piece lengthi16384e6:pieces20:%se", size, len(file), file, strings.Repeat("y", 20))
+	return f.addFile(title, info)
+}
+
+func (f *fakeProwlarr) addFile(title, info string) string {
+	name := fmt.Sprintf("t%d", len(f.releases))
+	f.files[name] = "d4:info" + info + "e"
 	f.releases = append(f.releases, map[string]any{
-		"guid": hash, "title": title, "indexer": "Homebrew Hub", "size": 4, "seeders": 50,
-		"protocol": "torrent", "magnetUrl": "magnet:?xt=urn:btih:" + hash,
+		"guid": name, "title": title, "indexer": "Homebrew Hub", "size": 4, "seeders": 5,
+		"protocol": "torrent", "infoUrl": "https://example.com/" + name,
+		"downloadUrl": f.proxyLink(name),
+		"categories":  []map[string]any{{"id": 1000, "name": "Console"}},
+	})
+	return name
+}
+
+func (f *fakeProwlarr) proxyLink(name string) string {
+	return f.URL + "/dl/" + name + "?apikey=" + prowlarrKey + "&link=x"
+}
+
+// addMagnetRelease adds a magnet-only release. As in Prowlarr's search API, its magnetUrl is a
+// link to the download proxy, which redirects to the magnet link.
+func (f *fakeProwlarr) addMagnetRelease(title, hash string) {
+	name := fmt.Sprintf("m%d", len(f.releases))
+	f.magnets[name] = "magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(title)
+	f.releases = append(f.releases, map[string]any{
+		"guid": name, "title": title, "indexer": "Homebrew Hub", "size": 4, "seeders": 50,
+		"protocol": "torrent", "magnetUrl": f.proxyLink(name),
 		"categories": []map[string]any{},
 	})
 	// A Usenet result is dropped.
 	f.releases = append(f.releases, map[string]any{"title": "usenet " + title, "protocol": "usenet", "downloadUrl": "http://x"})
 }
 
-// fakeQBittorrent keeps torrents in memory and requires a signed-in session.
+// fakeQBittorrent keeps torrents in memory and requires a signed-in session. It behaves like
+// qBittorrent 5.2 on libtorrent 2.x: a torrent's id is its truncated v2 hash when it has one,
+// the hashes filter matches ids only, and a refused add is 409.
 type fakeQBittorrent struct {
 	*httptest.Server
 	mu       sync.Mutex
 	torrents map[string]*qbittorrent.Torrent
 	files    map[string][]qbittorrent.File
 	deleted  []string
+	down     bool   // every call fails with 503
+	reject   bool   // every add is refused
+	onFiles  func() // called when a torrent's files are listed
 }
 
 func newFakeQBittorrent(t *testing.T) *fakeQBittorrent {
@@ -100,6 +141,10 @@ func newFakeQBittorrent(t *testing.T) *fakeQBittorrent {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if f.down {
+				http.Error(w, "down", http.StatusServiceUnavailable)
+				return
+			}
 			h(w, r)
 		}
 	}
@@ -108,20 +153,32 @@ func newFakeQBittorrent(t *testing.T) *fakeQBittorrent {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var hash string
+		var src torrent.Source
+		var err error
 		if fh := r.MultipartForm.File["torrents"]; len(fh) == 1 {
 			file, _ := fh[0].Open()
 			b, _ := io.ReadAll(file)
-			hash, _ = torrent.ID(b)
+			src, err = torrent.Identify(b)
 		} else {
-			hash, _ = torrent.MagnetID(r.FormValue("urls"))
+			src, err = torrent.ParseMagnet(r.FormValue("urls"))
 		}
-		if hash == "" || f.torrents[hash] != nil || r.FormValue("autoTMM") != "false" || r.FormValue("tags") != "rom-request" {
-			_, _ = io.WriteString(w, "Fails.")
+		var id string
+		if err == nil {
+			id = src.IDs[len(src.IDs)-1] // libtorrent 2.x prefers v2
+		}
+		if f.reject || id == "" || f.torrents[id] != nil || r.FormValue("autoTMM") != "false" || r.FormValue("tags") != "rom-request" {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"success_count":0,"failure_count":1,"pending_count":0}`)
 			return
 		}
-		f.torrents[hash] = &qbittorrent.Torrent{Hash: hash, State: "downloading", SavePath: r.FormValue("savepath") + "/"}
-		_, _ = io.WriteString(w, "Ok.")
+		t := &qbittorrent.Torrent{Hash: id, State: "downloading", SavePath: r.FormValue("savepath") + "/"}
+		if len(src.IDs) == 2 {
+			t.InfohashV1, t.InfohashV2 = src.IDs[0], src.IDs[1]+strings.Repeat("0", 24)
+		} else {
+			t.InfohashV1 = id
+		}
+		f.torrents[id] = t
+		_, _ = io.WriteString(w, `{"success_count":1,"failure_count":0,"pending_count":0}`)
 	}))
 	mux.HandleFunc("GET /api/v2/torrents/info", authed(func(w http.ResponseWriter, r *http.Request) {
 		out := []qbittorrent.Torrent{}
@@ -133,6 +190,9 @@ func newFakeQBittorrent(t *testing.T) *fakeQBittorrent {
 		_ = json.NewEncoder(w).Encode(out)
 	}))
 	mux.HandleFunc("GET /api/v2/torrents/files", authed(func(w http.ResponseWriter, r *http.Request) {
+		if f.onFiles != nil {
+			f.onFiles()
+		}
 		_ = json.NewEncoder(w).Encode(f.files[r.URL.Query().Get("hash")])
 	}))
 	mux.HandleFunc("POST /api/v2/torrents/delete", authed(func(w http.ResponseWriter, r *http.Request) {
@@ -166,4 +226,24 @@ func (f *fakeQBittorrent) set(hash string, fn func(*qbittorrent.Torrent), files 
 	if files != nil {
 		f.files[hash] = files
 	}
+}
+
+func (f *fakeQBittorrent) setDown(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = down
+}
+
+// only returns the one torrent the fake has.
+func (f *fakeQBittorrent) only(t *testing.T) qbittorrent.Torrent {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.torrents) != 1 {
+		t.Fatalf("qBittorrent has %d torrents", len(f.torrents))
+	}
+	for _, tr := range f.torrents {
+		return *tr
+	}
+	return qbittorrent.Torrent{}
 }
