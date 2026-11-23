@@ -168,6 +168,7 @@
             "clientId",
             "name",
             "allowedGroups",
+            "limitedGroups",
             "groupsClaim"
           ],
           "properties": {
@@ -185,6 +186,10 @@
               "maxLength": 64
             },
             "allowedGroups": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "limitedGroups": {
               "type": "string",
               "maxLength": 1024
             },

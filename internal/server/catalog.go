@@ -90,7 +90,8 @@ func (s *Server) ListCatalogPlatforms(ctx context.Context, _ api.ListCatalogPlat
 
 // ListCatalogGames lists one page of a platform's games, marking those the library has.
 func (s *Server) ListCatalogGames(ctx context.Context, req api.ListCatalogGamesRequestObject) (api.ListCatalogGamesResponseObject, error) {
-	if _, ok := userFrom(ctx); !ok {
+	u, ok := userFrom(ctx)
+	if !ok {
 		return api.ListCatalogGames401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
 	}
 	if s.catalog == nil || s.lib == nil {
@@ -132,18 +133,22 @@ func (s *Server) ListCatalogGames(ctx context.Context, req api.ListCatalogGamesR
 			have[k] = true
 		}
 	}
-	items := make([]api.CatalogGame, len(games))
-	for i, g := range games {
-		items[i] = api.CatalogGame{Id: g.ID, Name: g.Name, InLibrary: have[library.TitleKey(g.Name)]}
+	items := make([]api.CatalogGame, 0, len(games))
+	for _, g := range games {
+		if g.Mature && u.Limited {
+			continue
+		}
+		item := api.CatalogGame{Id: g.ID, Name: g.Name, InLibrary: have[library.TitleKey(g.Name)]}
 		if g.Year != 0 {
-			items[i].Year = &g.Year
+			item.Year = &g.Year
 		}
 		if g.Summary != "" {
-			items[i].Summary = &g.Summary
+			item.Summary = &g.Summary
 		}
 		if g.CoverID != "" {
-			items[i].CoverId = &g.CoverID
+			item.CoverId = &g.CoverID
 		}
+		items = append(items, item)
 	}
 	out := api.ListCatalogGames200JSONResponse{Items: items}
 	if next := offset + catalogPageSize; len(games) == catalogPageSize && next <= 10000 {
@@ -201,7 +206,7 @@ func (s *Server) RequestCatalogGame(ctx context.Context, req api.RequestCatalogG
 		return api.RequestCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotInCatalog)}, nil
 	}
 	game, err := s.catalog.Game(ctx, b.GameId, platform.ID)
-	if errors.Is(err, igdb.ErrNotFound) {
+	if errors.Is(err, igdb.ErrNotFound) || err == nil && game.Mature && u.Limited {
 		return api.RequestCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errGameNotFound)}, nil
 	}
 	if err != nil {
@@ -223,7 +228,8 @@ func (s *Server) RequestCatalogGame(ctx context.Context, req api.RequestCatalogG
 
 // GetCatalogGame returns one game's details.
 func (s *Server) GetCatalogGame(ctx context.Context, req api.GetCatalogGameRequestObject) (api.GetCatalogGameResponseObject, error) {
-	if _, ok := userFrom(ctx); !ok {
+	u, ok := userFrom(ctx)
+	if !ok {
 		return api.GetCatalogGame401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
 	}
 	if s.catalog == nil || s.lib == nil {
@@ -249,7 +255,8 @@ func (s *Server) GetCatalogGame(ctx context.Context, req api.GetCatalogGameReque
 		return api.GetCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errNotInCatalog)}, nil
 	}
 	d, err := s.catalog.Details(ctx, req.GameId, platform.ID)
-	if errors.Is(err, igdb.ErrNotFound) {
+	if errors.Is(err, igdb.ErrNotFound) || err == nil && d.Mature && u.Limited {
+		// A limited user isn't told a mature game is there.
 		return api.GetCatalogGame404JSONResponse{NotFoundJSONResponse: api.NotFoundJSONResponse(errGameNotFound)}, nil
 	}
 	if err != nil {

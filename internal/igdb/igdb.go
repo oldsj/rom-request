@@ -190,6 +190,35 @@ type Game struct {
 	Year    int // 0 when unknown
 	Summary string
 	CoverID string // IGDB image id, or empty
+	// Mature is rated for adults by any rating board that rated it, or erotic. A game no board
+	// rated (most from before the boards, 1994) is not.
+	Mature bool
+}
+
+// ratings are the fields a game's Mature is worked out from.
+type ratings struct {
+	AgeRatings []ageRating `json:"age_ratings"`
+	Themes     []int64     `json:"themes"`
+}
+
+type ageRating struct {
+	RatingCategory int64 `json:"rating_category"`
+}
+
+// ratingFields are the query's fields for ratings.
+const ratingFields = "age_ratings.rating_category,themes"
+
+// matureRatings are IGDB's age rating categories (age_rating_categories) for adults: ESRB M and
+// AO, PEGI 18, CERO D and Z, USK 18, GRAC 19+ and 18+, ClassInd 18, ACB MA 15+, R 18+ and RC.
+var matureRatings = []int64{6, 7, 12, 16, 17, 22, 26, 40, 33, 37, 38, 39}
+
+// themeErotic is IGDB's erotic theme.
+const themeErotic = 42
+
+func (r ratings) mature() bool {
+	return slices.Contains(r.Themes, themeErotic) || slices.ContainsFunc(r.AgeRatings, func(a ageRating) bool {
+		return slices.Contains(matureRatings, a.RatingCategory)
+	})
 }
 
 // Sort orders a browse without a search.
@@ -212,7 +241,7 @@ func (c *Client) Games(ctx context.Context, platformID int64, search string, sor
 	if s := cleanSearch(search); s != "" {
 		fmt.Fprintf(&b, "search \"%s\"; ", s)
 	}
-	b.WriteString("fields name,first_release_date,summary,cover.image_id; ")
+	b.WriteString("fields name,first_release_date,summary,cover.image_id," + ratingFields + "; ")
 	fmt.Fprintf(&b, "where platforms = (%d) & game_type = %s; ", platformID, gameTypes)
 	if cleanSearch(search) == "" {
 		if sort == SortName {
@@ -232,13 +261,14 @@ func (c *Client) Games(ctx context.Context, platformID int64, search string, sor
 		Cover            *struct {
 			ImageID string `json:"image_id"`
 		} `json:"cover"`
+		ratings
 	}
 	if err := c.query(ctx, "games", b.String(), &raw); err != nil {
 		return nil, err
 	}
 	out := make([]Game, 0, len(raw))
 	for _, r := range raw {
-		g := Game{ID: r.ID, Name: r.Name, Summary: r.Summary}
+		g := Game{ID: r.ID, Name: r.Name, Summary: r.Summary, Mature: r.mature()}
 		if r.FirstReleaseDate != 0 {
 			g.Year = time.Unix(r.FirstReleaseDate, 0).UTC().Year()
 		}
@@ -262,14 +292,15 @@ func (c *Client) Game(ctx context.Context, id, platformID int64) (Game, error) {
 		Cover     *struct {
 			ImageID string `json:"image_id"`
 		} `json:"cover"`
+		ratings
 	}
-	if err := c.query(ctx, "games", fmt.Sprintf("fields name,platforms,cover.image_id; where id = %d; limit 1;", id), &raw); err != nil {
+	if err := c.query(ctx, "games", fmt.Sprintf("fields name,platforms,cover.image_id,%s; where id = %d; limit 1;", ratingFields, id), &raw); err != nil {
 		return Game{}, err
 	}
 	if len(raw) == 0 || raw[0].Name == "" || !slices.Contains(raw[0].Platforms, platformID) {
 		return Game{}, ErrNotFound
 	}
-	g := Game{ID: raw[0].ID, Name: raw[0].Name}
+	g := Game{ID: raw[0].ID, Name: raw[0].Name, Mature: raw[0].mature()}
 	if raw[0].Cover != nil && ValidImageID(raw[0].Cover.ImageID) {
 		g.CoverID = raw[0].Cover.ImageID
 	}
@@ -329,10 +360,11 @@ func (c *Client) Details(ctx context.Context, id, platformID int64) (Details, er
 			Name    string `json:"name"`
 			VideoID string `json:"video_id"`
 		} `json:"videos"`
+		ratings
 	}
 	q := fmt.Sprintf("fields name,platforms,first_release_date,summary,storyline,total_rating,cover.image_id,"+
 		"genres.name,involved_companies.developer,involved_companies.company.name,screenshots.image_id,"+
-		"videos.name,videos.video_id; where id = %d; limit 1;", id)
+		"videos.name,videos.video_id,%s; where id = %d; limit 1;", ratingFields, id)
 	if err := c.query(ctx, "games", q, &raw); err != nil {
 		return Details{}, err
 	}
@@ -340,7 +372,7 @@ func (c *Client) Details(ctx context.Context, id, platformID int64) (Details, er
 		return Details{}, ErrNotFound
 	}
 	r := raw[0]
-	d := Details{Game: Game{ID: r.ID, Name: r.Name, Summary: r.Summary}, Storyline: r.Storyline, Rating: int(r.TotalRating + 0.5)}
+	d := Details{Game: Game{ID: r.ID, Name: r.Name, Summary: r.Summary, Mature: r.mature()}, Storyline: r.Storyline, Rating: int(r.TotalRating + 0.5)}
 	if r.FirstReleaseDate != 0 {
 		d.Year = time.Unix(r.FirstReleaseDate, 0).UTC().Year()
 	}

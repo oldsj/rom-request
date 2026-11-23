@@ -54,6 +54,10 @@ type Config struct {
 	// OIDCAllowedGroups, if set, admits only members of one of these groups (from the
 	// OIDCGroupsClaim claim; requested with the "groups" scope).
 	OIDCAllowedGroups []string `env:"OIDC_ALLOWED_GROUPS" envSeparator:","`
+	// OIDCLimitedGroups admit their members as limited users (children): they browse and
+	// request only catalog games not rated mature, and can't search releases. A member of an
+	// allowed group too is not limited.
+	OIDCLimitedGroups []string `env:"OIDC_LIMITED_GROUPS" envSeparator:","`
 	OIDCGroupsClaim   string   `env:"OIDC_GROUPS_CLAIM" envDefault:"groups"`
 	// OIDCName names the provider on the sign-in button.
 	OIDCName string `env:"OIDC_NAME" envDefault:"single sign-on"`

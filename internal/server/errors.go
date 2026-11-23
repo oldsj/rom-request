@@ -9,4 +9,6 @@ func apiError(code, message string) api.Error {
 var (
 	errUnauthorized = apiError("unauthorized", "Sign in to continue.")
 	errNotFound     = apiError("not_found", "Not found.")
+	// errLimited answers a limited user (a child) asking for what only parents may do.
+	errLimited = apiError("limited_account", "Ask a parent for this one.")
 )

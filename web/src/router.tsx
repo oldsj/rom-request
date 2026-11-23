@@ -44,6 +44,11 @@ const signedInRoute = createRoute({
 const searchRoute = createRoute({
   getParentRoute: () => signedInRoute,
   path: '/search',
+  beforeLoad: ({ context }) => {
+    // A child's account can't search releases (the server answers 403); Browse instead.
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router's redirect is thrown by design
+    if (context.me.limited) throw redirect({ to: '/' });
+  },
   // A game's name and the platform folder to request it into, from a link.
   validateSearch: (s: Record<string, unknown>): { q?: string | undefined; platform?: string | undefined } => ({
     q: typeof s.q === 'string' && s.q.length <= 200 ? s.q : undefined,

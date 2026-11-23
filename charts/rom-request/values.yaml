@@ -73,6 +73,9 @@ auth:
     # Only members of one of these groups may sign in, comma-separated. Empty: anyone the
     # provider signs in.
     allowedGroups: ""
+    # Members of these groups (children) sign in as limited users, comma-separated: they browse
+    # and request only catalog games not rated mature, and can't search releases.
+    limitedGroups: ""
     groupsClaim: groups
   # The client secret goes in secrets.env (leave it out for a public client):
   #   - name: OIDC_CLIENT_SECRET

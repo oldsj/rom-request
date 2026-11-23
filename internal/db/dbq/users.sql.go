@@ -15,7 +15,7 @@ import (
 const createOIDCUser = `-- name: CreateOIDCUser :one
 INSERT INTO users (email, password_hash, oidc_subject)
 VALUES ($1, '', $2)
-RETURNING id, email, password_hash, created_at, oidc_subject
+RETURNING id, email, password_hash, created_at, oidc_subject, limited
 `
 
 type CreateOIDCUserParams struct {
@@ -33,6 +33,7 @@ func (q *Queries) CreateOIDCUser(ctx context.Context, arg CreateOIDCUserParams) 
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.Limited,
 	)
 	return i, err
 }
@@ -40,7 +41,7 @@ func (q *Queries) CreateOIDCUser(ctx context.Context, arg CreateOIDCUserParams) 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, password_hash, created_at, oidc_subject
+RETURNING id, email, password_hash, created_at, oidc_subject, limited
 `
 
 type CreateUserParams struct {
@@ -57,12 +58,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.Limited,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, oidc_subject FROM users WHERE email = $1
+SELECT id, email, password_hash, created_at, oidc_subject, limited FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -74,12 +76,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.Limited,
 	)
 	return i, err
 }
 
 const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
-SELECT id, email, password_hash, created_at, oidc_subject FROM users WHERE oidc_subject = $1
+SELECT id, email, password_hash, created_at, oidc_subject, limited FROM users WHERE oidc_subject = $1
 `
 
 func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
@@ -91,6 +94,7 @@ func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.T
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.Limited,
 	)
 	return i, err
 }
@@ -98,7 +102,7 @@ func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.T
 const linkOIDCSubject = `-- name: LinkOIDCSubject :one
 UPDATE users SET oidc_subject = $2
 WHERE id = $1 AND oidc_subject IS NULL
-RETURNING id, email, password_hash, created_at, oidc_subject
+RETURNING id, email, password_hash, created_at, oidc_subject, limited
 `
 
 type LinkOIDCSubjectParams struct {
@@ -116,6 +120,32 @@ func (q *Queries) LinkOIDCSubject(ctx context.Context, arg LinkOIDCSubjectParams
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.OidcSubject,
+		&i.Limited,
+	)
+	return i, err
+}
+
+const setUserLimited = `-- name: SetUserLimited :one
+UPDATE users SET limited = $2 WHERE id = $1
+RETURNING id, email, password_hash, created_at, oidc_subject, limited
+`
+
+type SetUserLimitedParams struct {
+	ID      uuid.UUID
+	Limited bool
+}
+
+// At each OIDC sign-in, from the provider's groups.
+func (q *Queries) SetUserLimited(ctx context.Context, arg SetUserLimitedParams) (User, error) {
+	row := q.db.QueryRow(ctx, setUserLimited, arg.ID, arg.Limited)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.OidcSubject,
+		&i.Limited,
 	)
 	return i, err
 }

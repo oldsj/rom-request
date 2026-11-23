@@ -91,5 +91,5 @@ func (s *Server) GetMe(ctx context.Context, _ api.GetMeRequestObject) (api.GetMe
 	if !ok {
 		return api.GetMe401JSONResponse{UnauthorizedJSONResponse: api.UnauthorizedJSONResponse(errUnauthorized)}, nil
 	}
-	return api.GetMe200JSONResponse{Id: u.ID, Email: u.Email}, nil
+	return api.GetMe200JSONResponse{Id: u.ID, Email: u.Email, Limited: u.Limited}, nil
 }

@@ -209,6 +209,9 @@ export interface paths {
          * @description "In the library" is a match of the game's name against the names in the platform's
          *     folder, ignoring case, punctuation, a leading "The" and tags in brackets such as
          *     "(USA)". It can miss a game filed under another name.
+         *
+         *     A limited user doesn't see games rated mature; a page can then hold fewer games than
+         *     the page size, and `nextOffset` still leads on.
          */
         get: operations["listCatalogGames"];
         put?: never;
@@ -407,6 +410,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             email: string;
+            /**
+             * @description A child's account: browses and requests only catalog games not rated mature, and
+             *     can't search releases (403).
+             */
+            limited: boolean;
         };
         AuthMethods: {
             /** @description Email and password sign-in */
@@ -1110,6 +1118,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             502: components["responses"]["BadGateway"];
             503: components["responses"]["Unavailable"];
             default: components["responses"]["Error"];
@@ -1163,6 +1172,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             502: components["responses"]["BadGateway"];

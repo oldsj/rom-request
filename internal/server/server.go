@@ -95,7 +95,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 	if cfg.OIDCEnabled() {
 		s.oidc = oidc.New(oidc.Config{
 			Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
-			RedirectURL: cfg.OIDCRedirectURL, GroupsClaim: cfg.OIDCGroupsClaim, WantGroups: len(cfg.OIDCAllowedGroups) > 0,
+			RedirectURL: cfg.OIDCRedirectURL, GroupsClaim: cfg.OIDCGroupsClaim, WantGroups: len(cfg.OIDCAllowedGroups) > 0 || len(cfg.OIDCLimitedGroups) > 0,
 		}, &http.Client{Timeout: oidcTimeout})
 	}
 	return s, nil

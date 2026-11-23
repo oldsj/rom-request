@@ -27,6 +27,8 @@ type (
 type User struct {
 	ID    uuid.UUID
 	Email string
+	// Limited is a child's account: catalog games not rated mature, no release search.
+	Limited bool
 }
 
 func userFrom(ctx context.Context) (User, bool) {
@@ -53,7 +55,7 @@ func (s *Server) sessionUser(next http.Handler) http.Handler {
 			httpx.WriteError(w, http.StatusServiceUnavailable, "unavailable", "Try again shortly.")
 			return
 		default:
-			r = r.WithContext(context.WithValue(r.Context(), userKey{}, User{ID: row.ID, Email: row.Email}))
+			r = r.WithContext(context.WithValue(r.Context(), userKey{}, User{ID: row.ID, Email: row.Email, Limited: row.Limited}))
 		}
 		next.ServeHTTP(w, r)
 	})
