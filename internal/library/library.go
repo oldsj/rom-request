@@ -29,6 +29,9 @@ var (
 	ErrUnknownPlatform = errors.New("no such platform folder")
 	ErrIncomplete      = errors.New("download incomplete")
 	ErrUnsafePath      = errors.New("unsafe path in the torrent")
+	// ErrNoROM is a download with no game file for its platform (only a web page, images or
+	// metadata): nothing is imported.
+	ErrNoROM = errors.New("no game file in the download")
 )
 
 // Library is the ROM library: one top-level folder per platform.
@@ -168,6 +171,12 @@ func (l *Library) Import(ctx context.Context, downloads string, job Job) (Result
 	}
 	if !safeRel(job.SourceDir) || !safeRel(job.ID) {
 		return Result{}, fmt.Errorf("%w: job", ErrUnsafePath)
+	}
+	// Web pages, images and metadata never go into the library, and a download must hold at
+	// least one of the platform's game files.
+	job.Files = slices.DeleteFunc(slices.Clone(job.Files), func(f File) bool { return isJunk(f.Name) })
+	if !slices.ContainsFunc(job.Files, func(f File) bool { return isROM(job.Platform, f.Name) }) {
+		return Result{}, fmt.Errorf("%w for %s", ErrNoROM, job.Platform)
 	}
 
 	src, err := os.OpenRoot(downloads)

@@ -437,6 +437,57 @@ func (q *Queries) FailImport(ctx context.Context, arg FailImportParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const failImportNoGame = `-- name: FailImportNoGame :execrows
+WITH failed AS (
+    UPDATE requests r
+    SET status = 'failed', error_code = $1, error_message = $2,
+        import_claim = NULL, updated_at = now(), step_started_at = now(),
+        title = CASE WHEN r.game_id IS NOT NULL THEN r.game_name ELSE r.title END,
+        indexer = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.indexer END,
+        size_bytes = CASE WHEN r.game_id IS NOT NULL THEN 0 ELSE r.size_bytes END,
+        info_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.info_url END,
+        download_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.download_url END,
+        magnet_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.magnet_url END,
+        torrent_hash = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.torrent_hash END,
+        torrent_ids = CASE WHEN r.game_id IS NOT NULL THEN '{}'::text[] ELSE r.torrent_ids END
+    FROM requests old
+    WHERE r.id = $3 AND r.import_claim = $4 AND r.status = 'importing'
+      AND old.id = r.id
+    RETURNING r.game_id, old.torrent_ids AS old_torrent_ids
+), queued AS (
+    INSERT INTO torrent_removals (torrent_ids, save_path)
+    SELECT failed.old_torrent_ids, $5::text FROM failed
+    WHERE failed.game_id IS NOT NULL AND cardinality(failed.old_torrent_ids) > 0
+    RETURNING torrent_removals.id
+)
+SELECT 1 FROM failed
+`
+
+type FailImportNoGameParams struct {
+	ErrorCode    string
+	ErrorMessage string
+	ID           uuid.UUID
+	ImportClaim  pgtype.UUID
+	SavePath     string
+}
+
+// Worker, holding the claim: the download held no game file for its platform (only a web page,
+// images or metadata). A catalog request also forgets the release and queues its torrent for
+// removal, so Retry searches for another; a manual one keeps it (Retry downloads it again).
+func (q *Queries) FailImportNoGame(ctx context.Context, arg FailImportNoGameParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failImportNoGame,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.ID,
+		arg.ImportClaim,
+		arg.SavePath,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const foundRelease = `-- name: FoundRelease :one
 UPDATE requests
 SET status = 'queued', title = $2, indexer = $3, size_bytes = $4, info_url = $5,

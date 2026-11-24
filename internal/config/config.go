@@ -75,6 +75,9 @@ type Config struct {
 	// ProwlarrCategories limits searches to these Newznab category ids (1000 is Console).
 	// Empty searches every category.
 	ProwlarrCategories []int `env:"PROWLARR_CATEGORIES" envSeparator:","`
+	// ProwlarrBlockedIndexers are indexer names (as Prowlarr shows them) whose results are
+	// dropped. BlueRoms serves its own web page and images, not the game, as a "release".
+	ProwlarrBlockedIndexers []string `env:"PROWLARR_BLOCKED_INDEXERS" envSeparator:"," envDefault:"BlueRoms"`
 
 	// QBittorrentURL is qBittorrent's Web UI base URL, e.g. http://qbittorrent.torrent:8080.
 	QBittorrentURL string `env:"QBITTORRENT_URL"`
@@ -105,6 +108,13 @@ type Config struct {
 	// the built-in aliases don't cover it, e.g. "megadrive=genesis-slash-megadrive".
 	CatalogPlatforms map[string]string `env:"CATALOG_PLATFORMS" envSeparator:"," envKeyValSeparator:"="`
 
+	// RomMURL is RomM's base URL, e.g. http://romm.romm.svc:8080. With RomMAPIToken, the worker
+	// asks RomM for a quick scan of a platform folder after each import.
+	RomMURL string `env:"ROMM_URL"`
+	// RomMAPIToken is a RomM client API token (an admin's, made in RomM under Profile, with only
+	// the tasks.run scope). Secret. Without it, new games wait for RomM's own scheduled scan.
+	RomMAPIToken string `env:"ROMM_API_TOKEN"`
+
 	// WorkerInterval is how often active requests are checked against qBittorrent.
 	WorkerInterval time.Duration `env:"WORKER_INTERVAL" envDefault:"15s"`
 }
@@ -117,6 +127,9 @@ func (c Config) CatalogEnabled() bool { return c.IGDBClientID != "" }
 
 // SearchEnabled reports whether Prowlarr is configured.
 func (c Config) SearchEnabled() bool { return c.ProwlarrURL != "" }
+
+// RomMScanEnabled reports whether imports ask RomM to scan.
+func (c Config) RomMScanEnabled() bool { return c.RomMURL != "" && c.RomMAPIToken != "" }
 
 // LibraryEnabled reports whether the ROM library folder is configured.
 func (c Config) LibraryEnabled() bool { return c.LibraryDir != "" }
@@ -155,7 +168,7 @@ func (c Config) validate() error {
 
 func (c Config) validateIntegrations() []error {
 	var errs []error
-	for name, u := range map[string]string{"PROWLARR_URL": c.ProwlarrURL, "QBITTORRENT_URL": c.QBittorrentURL} {
+	for name, u := range map[string]string{"PROWLARR_URL": c.ProwlarrURL, "QBITTORRENT_URL": c.QBittorrentURL, "ROMM_URL": c.RomMURL} {
 		if u == "" {
 			continue
 		}
@@ -165,6 +178,9 @@ func (c Config) validateIntegrations() []error {
 	}
 	if c.ProwlarrURL != "" && c.ProwlarrAPIKey == "" {
 		errs = append(errs, errors.New("PROWLARR_API_KEY is required with PROWLARR_URL"))
+	}
+	if c.RomMAPIToken != "" && c.RomMURL == "" {
+		errs = append(errs, errors.New("ROMM_API_TOKEN needs ROMM_URL"))
 	}
 	if (c.IGDBClientID == "") != (c.IGDBClientSecret == "") {
 		errs = append(errs, errors.New("IGDB_CLIENT_ID and IGDB_CLIENT_SECRET go together"))

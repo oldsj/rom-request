@@ -33,7 +33,12 @@ secrets:
       key: qbittorrent-username
     - name: QBITTORRENT_PASSWORD
       key: qbittorrent-password
+    - name: ROMM_API_TOKEN
+      key: romm-api-token
+      optional: true
 integrations:
+  romm:
+    url: http://romm.romm.svc:8080
   catalog:
     platforms: md=genesis-slash-megadrive
   prowlarr:

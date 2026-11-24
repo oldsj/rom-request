@@ -178,3 +178,78 @@ func TestImportCancelled(t *testing.T) {
 		t.Errorf("staging left behind: %v", entries)
 	}
 }
+
+func TestImportRefusesDownloadWithoutROM(t *testing.T) {
+	f := setup(t)
+	if err := os.MkdirAll(filepath.Join(f.lib, "GENESIS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An indexer landing page saved as a "release": no game file at all.
+	src := filepath.Join(f.downloads, "req1")
+	files := []File{
+		write(t, src, "Road Rash (USA, Europe)/BLUEROMS.WS.html", "<html>"),
+		write(t, src, "Road Rash (USA, Europe)/imgs/cover.jpg", "jpg"),
+		write(t, src, "Road Rash (USA, Europe)/metadata.json", "{}"),
+	}
+	_, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req1", SourceDir: "req1", Files: files, Platform: "GENESIS", Title: "Road Rash"})
+	if !errors.Is(err, ErrNoROM) {
+		t.Fatalf("Import = %v, want ErrNoROM", err)
+	}
+	if games, _ := f.l.Games("GENESIS"); len(games) != 0 {
+		t.Fatalf("library got %v", games)
+	}
+
+	// A file of another platform's type is no GBA game either.
+	nes := write(t, filepath.Join(f.downloads, "req2"), "Game.nes", "rom")
+	if _, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req2", SourceDir: "req2", Files: []File{nes}, Platform: "GBA"}); !errors.Is(err, ErrNoROM) {
+		t.Fatalf("Import .nes into GBA = %v, want ErrNoROM", err)
+	}
+}
+
+func TestImportSkipsJunkFiles(t *testing.T) {
+	f := setup(t)
+	src := filepath.Join(f.downloads, "req1")
+	files := []File{
+		write(t, src, "Pack/Game.gba", "rom bytes"),
+		write(t, src, "Pack/site.html", "<html>"),
+		write(t, src, "Pack/imgs/box.png", "png"),
+	}
+	res, err := f.l.Import(t.Context(), f.downloads, Job{ID: "req1", SourceDir: "req1", Files: files, Platform: "GBA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the game is left, so it lands as one file.
+	if res.Path != "GBA/Game.gba" || res.Files != 1 {
+		t.Fatalf("Import = %+v", res)
+	}
+	if games, _ := f.l.Games("GBA"); !slices.Equal(games, []string{"Game.gba"}) {
+		t.Fatalf("GBA holds %v", games)
+	}
+}
+
+func TestIsROM(t *testing.T) {
+	for _, c := range []struct {
+		platform, name string
+		want           bool
+	}{
+		{"GBA", "Zelda - the Minish Cap.GBA", true},
+		{"GBA", "Game.zip", true},
+		{"GBA", "Game.7z", true},
+		{"GBA", "BLUEROMS.WS.html", false},
+		{"PS1", "Game (Track 1).bin", true},
+		{"PS1", "Game.cue", true},
+		{"PS1", "Game.chd", true},
+		{"GENESIS", "Sonic.md", true},
+		{"GENESIS", "metadata.json", false},
+		{"GG", "Sonic.gg", true},
+		{"SNES", "Mario.sfc", true},
+		{"N64", "Mario.z64", true},
+		{"N64", "Mario.gba", false},
+		{"Unknown", "game.rom", true},
+		{"Unknown", "cover.png", false},
+	} {
+		if got := isROM(c.platform, c.name); got != c.want {
+			t.Errorf("isROM(%q, %q) = %v, want %v", c.platform, c.name, got, c.want)
+		}
+	}
+}

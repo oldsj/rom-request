@@ -95,6 +95,8 @@ auth:
 #     key: igdb-client-secret
 secrets:
   existingSecret: ""
+  # { name: ENV_VAR, key: secret-key, optional: true|false }. An optional key may be missing
+  # from the Secret.
   env: []
 
 # Prowlarr, qBittorrent and the ROM library. Each is optional; the app reports what's missing.
@@ -104,6 +106,9 @@ integrations:
     url: ""
     # Newznab category ids to search, comma-separated ("1000" is Console). Empty: all.
     categories: ""
+    # Indexers whose results are dropped, by name, comma-separated. BlueRoms hands out its own
+    # web page and images as the "release", not the game.
+    blockedIndexers: BlueRoms
   qbittorrent:
     # e.g. http://qbittorrent.torrent.svc:8080
     url: ""
@@ -111,6 +116,13 @@ integrations:
     category: ""
     # The download folder as qBittorrent sees it; storage.downloads mounts the same folder here.
     savePath: ""
+  # RomM, to scan a platform folder as soon as a game lands in it. Needs ROMM_API_TOKEN in
+  # secrets.env (a RomM client API token with only the tasks.run scope; mark it optional: true
+  # to start without it) and egress to RomM. Without them, new games wait for RomM's own
+  # scheduled scan.
+  romm:
+    # e.g. http://romm.romm.svc:8080
+    url: ""
   # Top-level library folders that aren't platforms, comma-separated.
   libraryExclude: bios
   workerInterval: 15s
