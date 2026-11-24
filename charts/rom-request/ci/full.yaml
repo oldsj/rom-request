@@ -66,6 +66,8 @@ route:
   gateway:
     name: home-gateway
     namespace: gateway
+  extraGateways:
+    - { name: family-gateway, namespace: family-gateway }
 networkPolicy:
   extraEgress:
     - to:

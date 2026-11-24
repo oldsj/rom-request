@@ -15,19 +15,27 @@ spec:
     name: {{ .Values.route.clusterIssuer | quote }}
   dnsNames:
     - {{ $host | quote }}
+{{- /* The ListenerSet on route.gateway keeps the app's own name; each of route.extraGateways
+gets <name>-<gateway name>. The one HTTPRoute attaches to all of them. */}}
+{{- $listenerSets := list (dict "name" $name "gateway" .Values.route.gateway) }}
+{{- range .Values.route.extraGateways }}
+{{- $gw := required "route.extraGateways[].name is required" .name }}
+{{- $listenerSets = append $listenerSets (dict "name" (printf "%s-%s" $name $gw) "gateway" .) }}
+{{- end }}
+{{- range $listenerSets }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: ListenerSet
 metadata:
-  name: {{ $name }}
+  name: {{ .name }}
   labels:
-    {{- include "app.labels" . | nindent 4 }}
+    {{- include "app.labels" $ | nindent 4 }}
 spec:
   parentRef:
     group: gateway.networking.k8s.io
     kind: Gateway
-    name: {{ required "route.gateway.name is required when route.enabled" .Values.route.gateway.name | quote }}
-    namespace: {{ required "route.gateway.namespace is required when route.enabled" .Values.route.gateway.namespace | quote }}
+    name: {{ required "route.gateway.name is required when route.enabled" .gateway.name | quote }}
+    namespace: {{ required "route.gateway.namespace is required when route.enabled" .gateway.namespace | quote }}
   listeners:
     - name: https
       protocol: HTTPS
@@ -42,6 +50,7 @@ spec:
           - group: ""
             kind: Secret
             name: {{ $name }}-tls
+{{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -51,10 +60,12 @@ metadata:
     {{- include "app.labels" . | nindent 4 }}
 spec:
   parentRefs:
+    {{- range $listenerSets }}
     - group: gateway.networking.k8s.io
       kind: ListenerSet
-      name: {{ $name }}
+      name: {{ .name }}
       sectionName: https
+    {{- end }}
   hostnames:
     - {{ $host | quote }}
   rules:
