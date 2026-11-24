@@ -163,6 +163,11 @@ route:
   gateway:
     name: ""
     namespace: ""
+  # More gateways for the same hostname and certificate, e.g. one another network reaches:
+  #   - { name: family-gateway, namespace: family-gateway }
+  # Each gets a ListenerSet named <fullname>-<gateway name>, and the HTTPRoute attaches to every
+  # ListenerSet. Allow each gateway's proxies in networkPolicy.ingressFrom too.
+  extraGateways: []
   clusterIssuer: letsencrypt-prod
 
 networkPolicy:
