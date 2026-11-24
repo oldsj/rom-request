@@ -123,6 +123,14 @@ spec:
             - name: PROWLARR_CATEGORIES
               value: {{ . | quote }}
             {{- end }}
+            {{- if $int.prowlarr.url }}
+            - name: PROWLARR_BLOCKED_INDEXERS
+              value: {{ $int.prowlarr.blockedIndexers | default "" | quote }}
+            {{- end }}
+            {{- with ($int.romm).url }}
+            - name: ROMM_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- with $int.qbittorrent.url }}
             {{- if not (and $storage.downloads $storage.library) }}
             {{- fail "integrations.qbittorrent.url needs storage.downloads and storage.library" }}
@@ -158,6 +166,9 @@ spec:
                 secretKeyRef:
                   name: {{ required "secrets.existingSecret is required with secrets.env" $secret | quote }}
                   key: {{ .key | quote }}
+                  {{- if .optional }}
+                  optional: true
+                  {{- end }}
             {{- end }}
           securityContext:
             privileged: false

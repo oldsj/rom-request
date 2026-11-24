@@ -25,6 +25,7 @@ import (
 	"github.com/oldsj/rom-request/internal/prowlarr"
 	"github.com/oldsj/rom-request/internal/qbittorrent"
 	"github.com/oldsj/rom-request/internal/requests"
+	"github.com/oldsj/rom-request/internal/romm"
 	"github.com/oldsj/rom-request/web"
 )
 
@@ -65,6 +66,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 		if err != nil {
 			return nil, err
 		}
+		c.Block(cfg.ProwlarrBlockedIndexers)
 		s.search = c
 	}
 	if cfg.LibraryEnabled() {
@@ -82,12 +84,23 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) (*Server, erro
 			if err != nil {
 				return nil, err
 			}
+			c.Block(cfg.ProwlarrBlockedIndexers)
 			search = c
 		}
 		s.reqs = requests.New(s.q, qb, search, s.lib, hc, requests.Config{
 			SavePath: cfg.QBittorrentSavePath, DownloadDir: cfg.DownloadDir, Category: cfg.QBittorrentCategory,
 			Categories: cfg.ProwlarrCategories,
 		}, log)
+		switch {
+		case cfg.RomMScanEnabled():
+			rc, err := romm.New(cfg.RomMURL, cfg.RomMAPIToken, hc)
+			if err != nil {
+				return nil, err
+			}
+			s.reqs.SetScanner(rc)
+		case cfg.RomMURL != "":
+			log.Warn("ROMM_URL is set but ROMM_API_TOKEN isn't: new games wait for RomM's scheduled scan")
+		}
 	}
 	if cfg.CatalogEnabled() {
 		s.catalog = igdb.New(igdb.Config{ClientID: cfg.IGDBClientID, ClientSecret: cfg.IGDBClientSecret}, hc)

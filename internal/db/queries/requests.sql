@@ -147,6 +147,34 @@ SET status = 'failed', error_code = $3, error_message = $4, import_claim = NULL,
     updated_at = now(), step_started_at = now()
 WHERE id = $1 AND import_claim = $2 AND status = 'importing';
 
+-- name: FailImportNoGame :execrows
+-- Worker, holding the claim: the download held no game file for its platform (only a web page,
+-- images or metadata). A catalog request also forgets the release and queues its torrent for
+-- removal, so Retry searches for another; a manual one keeps it (Retry downloads it again).
+WITH failed AS (
+    UPDATE requests r
+    SET status = 'failed', error_code = sqlc.arg(error_code), error_message = sqlc.arg(error_message),
+        import_claim = NULL, updated_at = now(), step_started_at = now(),
+        title = CASE WHEN r.game_id IS NOT NULL THEN r.game_name ELSE r.title END,
+        indexer = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.indexer END,
+        size_bytes = CASE WHEN r.game_id IS NOT NULL THEN 0 ELSE r.size_bytes END,
+        info_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.info_url END,
+        download_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.download_url END,
+        magnet_url = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.magnet_url END,
+        torrent_hash = CASE WHEN r.game_id IS NOT NULL THEN '' ELSE r.torrent_hash END,
+        torrent_ids = CASE WHEN r.game_id IS NOT NULL THEN '{}'::text[] ELSE r.torrent_ids END
+    FROM requests old
+    WHERE r.id = sqlc.arg(id) AND r.import_claim = sqlc.arg(import_claim) AND r.status = 'importing'
+      AND old.id = r.id
+    RETURNING r.game_id, old.torrent_ids AS old_torrent_ids
+), queued AS (
+    INSERT INTO torrent_removals (torrent_ids, save_path)
+    SELECT failed.old_torrent_ids, sqlc.arg(save_path)::text FROM failed
+    WHERE failed.game_id IS NOT NULL AND cardinality(failed.old_torrent_ids) > 0
+    RETURNING torrent_removals.id
+)
+SELECT 1 FROM failed;
+
 -- name: MarkFailed :execrows
 -- Worker and handler: a searching, queued or downloading request -> failed, from the status
 -- the caller saw, with a reason the user can act on.

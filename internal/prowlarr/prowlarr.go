@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,23 @@ type Client struct {
 	base   *url.URL
 	apiKey string
 	hc     *http.Client
+	// blocked are indexer names (lower case) whose results are dropped.
+	blocked []string
+}
+
+// Block drops results from these indexers (matched by name, ignoring case): ones that serve a
+// web page or ads instead of the game.
+func (c *Client) Block(indexers []string) {
+	c.blocked = nil
+	for _, name := range indexers {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			c.blocked = append(c.blocked, name)
+		}
+	}
+}
+
+func (c *Client) isBlocked(indexer string) bool {
+	return slices.Contains(c.blocked, strings.ToLower(strings.TrimSpace(indexer)))
 }
 
 // New makes a Client. baseURL has been validated by config.
@@ -58,7 +76,8 @@ func New(baseURL, apiKey string, hc *http.Client) (*Client, error) {
 const MaxResults = 100
 
 // Search runs an interactive search across the configured indexers and returns its torrent
-// results (Usenet results are dropped: there is no Usenet downloader).
+// results (Usenet results are dropped: there is no Usenet downloader), less those of blocked
+// indexers.
 func (c *Client) Search(ctx context.Context, query string, categories []int) ([]Release, error) {
 	q := url.Values{"query": {query}, "type": {"search"}, "limit": {strconv.Itoa(MaxResults)}}
 	for _, cat := range categories {
@@ -87,7 +106,7 @@ func (c *Client) Search(ctx context.Context, query string, categories []int) ([]
 	}
 	out := make([]Release, 0, len(all))
 	for _, r := range all {
-		if r.Protocol == "torrent" && (r.DownloadURL != "" || r.MagnetURL != "") {
+		if r.Protocol == "torrent" && (r.DownloadURL != "" || r.MagnetURL != "") && !c.isBlocked(r.Indexer) {
 			out = append(out, r)
 		}
 	}

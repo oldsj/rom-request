@@ -12,7 +12,9 @@ import (
 	"math"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,7 +74,21 @@ type Service struct {
 	cfg    Config
 	log    *slog.Logger
 	now    func() time.Time
+
+	// scanner asks RomM to scan a platform folder after an import; nil when not configured.
+	// Folders waiting for a scan RomM hasn't accepted yet are retried each round.
+	scanner     Scanner
+	scanMu      sync.Mutex
+	pendingScan map[string]struct{}
 }
+
+// Scanner asks RomM to scan library folders (romm.Client).
+type Scanner interface {
+	ScanPlatforms(ctx context.Context, folders []string) error
+}
+
+// SetScanner turns on asking RomM to scan a platform folder after each import.
+func (s *Service) SetScanner(sc Scanner) { s.scanner = sc }
 
 // SetClock replaces the clock the worker's waits are measured with (tests).
 func (s *Service) SetClock(now func() time.Time) { s.now = now }
@@ -351,7 +367,49 @@ func (s *Service) Tick(ctx context.Context) error {
 	if err := s.followDownloads(ctx, downloading); err != nil {
 		errs = append(errs, err)
 	}
+	s.requestScans(ctx)
 	return errors.Join(errs...)
+}
+
+// scanLater notes a platform folder for RomM to scan.
+func (s *Service) scanLater(platform string) {
+	if s.scanner == nil {
+		return
+	}
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	if s.pendingScan == nil {
+		s.pendingScan = map[string]struct{}{}
+	}
+	s.pendingScan[platform] = struct{}{}
+}
+
+// requestScans asks RomM to scan the folders imports landed in. One it doesn't accept (busy with
+// another scan, or down) is asked again next round; RomM's nightly scan is the backstop.
+func (s *Service) requestScans(ctx context.Context) {
+	if s.scanner == nil {
+		return
+	}
+	s.scanMu.Lock()
+	folders := make([]string, 0, len(s.pendingScan))
+	for f := range s.pendingScan {
+		folders = append(folders, f)
+	}
+	s.scanMu.Unlock()
+	if len(folders) == 0 {
+		return
+	}
+	slices.Sort(folders)
+	if err := s.scanner.ScanPlatforms(ctx, folders); err != nil {
+		s.log.WarnContext(ctx, "romm scan not started; trying again next round", "platforms", folders, "err", err)
+		return
+	}
+	s.log.InfoContext(ctx, "romm scan requested", "platforms", folders)
+	s.scanMu.Lock()
+	for _, f := range folders {
+		delete(s.pendingScan, f)
+	}
+	s.scanMu.Unlock()
 }
 
 func (s *Service) noteSubmitFailure(ctx context.Context, r dbq.Request) {
@@ -490,6 +548,17 @@ func (s *Service) importRequest(ctx context.Context, r dbq.Request, qbID string)
 	case errors.Is(context.Cause(ictx), errClaimLost):
 		s.log.WarnContext(ctx, "import stopped: claim lost", "request", r.ID)
 		return
+	case errors.Is(err, library.ErrNoROM):
+		s.log.WarnContext(ctx, "import refused: no game file", "request", r.ID, "indexer", claimed.Indexer, "err", err)
+		f := noGameFailure(claimed)
+		wctx, cancel := detached(ctx)
+		defer cancel()
+		if _, err := s.q.FailImportNoGame(wctx, dbq.FailImportNoGameParams{
+			ID: r.ID, ImportClaim: claim, ErrorCode: f.Code, ErrorMessage: f.Message, SavePath: s.savePath(claimed),
+		}); err != nil {
+			s.log.ErrorContext(ctx, "mark import failed", "request", r.ID, "err", err)
+		}
+		return
 	default:
 		s.log.WarnContext(ctx, "import", "request", r.ID, "err", err)
 		finish(importFailure(err, claimed.Platform))
@@ -508,6 +577,17 @@ func (s *Service) importRequest(ctx context.Context, r dbq.Request, qbID string)
 		return
 	}
 	s.log.InfoContext(ctx, "imported", "request", r.ID, "path", res.Path, "files", res.Files)
+	s.scanLater(claimed.Platform)
+}
+
+// noGameFailure explains a download that held no game file. A catalog request has forgotten
+// the release (FailImportNoGame), so Retry searches for another.
+func noGameFailure(r dbq.Request) Failure {
+	next := "Retry to search for another release."
+	if !r.GameID.Valid {
+		next = "Pick another search result."
+	}
+	return Failure{"no_rom", fmt.Sprintf("The download has no %s game file (only web pages, images or metadata), so nothing was added to the library. %s", r.Platform, next)}
 }
 
 // renew keeps an import's claim fresh until ctx ends, and stops the import when the claim is

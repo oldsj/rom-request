@@ -63,8 +63,15 @@ Manual requests, from Search:
    Files are copied into `LIBRARY_DIR/.rom-request/<request id>`, synced, checked against the
    sizes qBittorrent reported, hashed, and only then moved into place with an operation that
    fails rather than replace anything. The download stays in qBittorrent, seeding.
-6. **Done.** The request records the path, file count and (for one file) SHA-256. RomM picks it
-   up at its next scan.
+   Web pages, images and metadata files (`.html`, `.json`, `.jpg`, `.png` and the like) are
+   never imported. A download with no game file for its platform (the platform's ROM types, or
+   a `.zip`/`.7z`, which RomM reads for any platform) fails with `no_rom` and nothing reaches
+   the library: some indexers serve their own landing page as the "release". A catalog request
+   then forgets that release and removes its torrent, so Retry searches for another.
+6. **Done.** The request records the path, file count and (for one file) SHA-256. With
+   `ROMM_URL` and `ROMM_API_TOKEN` set, the worker asks RomM for a quick scan of that platform
+   folder (`POST /api/tasks/scan`); if RomM is busy or down it asks again each round. Without
+   them, RomM finds the game at its next scheduled scan.
 
 Each step is an `UPDATE ... WHERE status = ...`, so two replicas never take the same step. An
 import holds a claim it renews every 30 seconds; only the holder can finish it. On shutdown an
@@ -78,6 +85,7 @@ the library.
 
 | Code | Meaning | Next step |
 | --- | --- | --- |
+| `no_rom` | The download held no game file for the platform (a web page, images) | Catalog: Retry searches for another release. Manual: pick another result |
 | `library_conflict` | A file or folder with that name exists | Rename or remove it in the library, retry |
 | `unknown_platform` | The platform folder is gone | Recreate it, retry |
 | `download_incomplete` | Files missing or the wrong size | Recheck the torrent in qBittorrent, retry |
@@ -94,8 +102,18 @@ ROM Request writes RomM's
 (`<library>/<platform>/<game>`) and treats top-level folders as platforms, except
 `LIBRARY_EXCLUDE` (default `bios`) and names starting with `.`, `#` or `@`. RomM only reads the
 library; ROM Request needs its own writable mount of the same folder. Add `.rom-request` to
-`exclude.platforms` in RomM's `config.yml`, and let RomM's scheduled rescan find new games
-(RomM's API is behind its own sign-in, so ROM Request doesn't trigger scans).
+`exclude.platforms` in RomM's `config.yml`.
+
+New games reach RomM two ways. RomM's own scheduled rescan (`ENABLE_SCHEDULED_RESCAN`) is the
+backstop. For a game to show up within a minute, give ROM Request a RomM client API token
+(RomM 5.4+: an admin's Profile → Client API tokens, scope `tasks.run` only) as
+`ROMM_API_TOKEN`, with `ROMM_URL`: after each import it asks for a quick scan (new files only)
+of that platform folder. The token is a bearer token for RomM's API only; RomM's sign-in
+(OIDC, say) is unchanged. RomM's filesystem watcher doesn't see writes made over NFS from
+another machine, so don't rely on it.
+
+`PROWLARR_BLOCKED_INDEXERS` (default `BlueRoms`) drops an indexer's results from every search;
+BlueRoms answers with its own web page and images, not the game.
 
 ## Scope
 

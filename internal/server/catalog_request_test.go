@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/oldsj/rom-request/internal/igdb"
+	"github.com/oldsj/rom-request/internal/romm"
 )
 
 // catalogRig is the request rig with the fake IGDB as its catalog.
@@ -117,5 +121,114 @@ func TestCatalogRequestExpiredLink(t *testing.T) {
 	r.tick()
 	if got := r.request(r.client, id); got["status"] != "downloading" {
 		t.Fatalf("searched again: %v", got)
+	}
+}
+
+// fakeScanner records the RomM scans the worker asks for; busy makes RomM answer 409.
+type fakeScanner struct {
+	mu    sync.Mutex
+	scans [][]string
+	busy  bool
+}
+
+func (f *fakeScanner) ScanPlatforms(_ context.Context, folders []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.busy {
+		return romm.ErrBusy
+	}
+	f.scans = append(f.scans, folders)
+	return nil
+}
+
+func (f *fakeScanner) got() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.scans)
+}
+
+// A release that is only an indexer's web page: nothing reaches the library, the request fails
+// with no_rom, forgets the release and removes its torrent, and Retry searches for another.
+func TestCatalogRequestJunkRelease(t *testing.T) {
+	r := catalogRig(t)
+	scans := &fakeScanner{}
+	r.srv.Worker().SetScanner(scans)
+	r.prowlarr.addTorrentRelease("Metroid Fusion (USA) [GBA]", "BLUEROMS.WS.html", 6)
+	_, req, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 2})
+	id := req["id"].(string)
+	r.tick()
+	tor := r.qb.only(t)
+	r.finish(tor.Hash, id, "BLUEROMS.WS.html", "<html>")
+	r.tick()
+	got := r.request(r.client, id)
+	if e, _ := got["error"].(map[string]any); got["status"] != "failed" || e["code"] != "no_rom" || got["title"] != "Metroid Fusion" {
+		t.Fatalf("junk release: %v", got)
+	}
+	if games, _ := r.srv.lib.Games("GBA"); len(games) != 0 {
+		t.Fatalf("library: %v", games)
+	}
+	if s := scans.got(); len(s) != 0 {
+		t.Errorf("scanned after a failed import: %v", s)
+	}
+	r.tick() // the removal queue deletes the junk torrent
+	if r.qb.get(tor.Hash) != nil {
+		t.Errorf("junk torrent still in qBittorrent")
+	}
+
+	if code, body, _ := r.do("POST", "/api/requests/"+id+"/retry", nil); code != 200 || body["status"] != "searching" {
+		t.Fatalf("retry: %d %v", code, body)
+	}
+	r.prowlarr.addTorrentRelease("Metroid Fusion (USA) (Rev 1) [GBA]", "Metroid Fusion (USA).gba", 4)
+	r.tick()
+	var good string
+	r.qb.mu.Lock()
+	for h := range r.qb.torrents {
+		good = h
+	}
+	r.qb.mu.Unlock()
+	r.finish(good, id, "Metroid Fusion (USA).gba", "rom!")
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "imported" {
+		t.Fatalf("after retry: %v", got)
+	}
+	if s := scans.got(); !slices.EqualFunc(s, [][]string{{"GBA"}}, slices.Equal) {
+		t.Errorf("RomM scans: %v", s)
+	}
+}
+
+// RomM busy with another scan: the worker asks again next round.
+func TestRomMScanRetriedWhenBusy(t *testing.T) {
+	r := catalogRig(t)
+	scans := &fakeScanner{busy: true}
+	r.srv.Worker().SetScanner(scans)
+	r.prowlarr.addTorrentRelease("Metroid Fusion (USA) [GBA]", "Metroid Fusion (USA).gba", 4)
+	_, req, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 2})
+	id := req["id"].(string)
+	r.tick()
+	r.finish(r.qb.only(t).Hash, id, "Metroid Fusion (USA).gba", "rom!")
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "imported" {
+		t.Fatalf("import: %v", got)
+	}
+	scans.mu.Lock()
+	scans.busy = false
+	scans.mu.Unlock()
+	r.tick()
+	r.tick()
+	if s := scans.got(); !slices.EqualFunc(s, [][]string{{"GBA"}}, slices.Equal) {
+		t.Errorf("RomM scans: %v", s)
+	}
+}
+
+// Results from a blocked indexer (BlueRoms by default) are never offered or picked.
+func TestBlockedIndexer(t *testing.T) {
+	r := catalogRig(t)
+	r.prowlarr.addTorrentRelease("Metroid Fusion (USA) [GBA]", "Metroid Fusion (USA).gba", 4)
+	r.prowlarr.releases[len(r.prowlarr.releases)-1]["indexer"] = "BlueRoms"
+	_, req, _ := r.do("POST", "/api/catalog/requests", map[string]any{"platform": "GBA", "gameId": 2})
+	id := req["id"].(string)
+	r.tick()
+	if got := r.request(r.client, id); got["status"] != "failed" {
+		t.Fatalf("blocked indexer picked: %v", got)
 	}
 }

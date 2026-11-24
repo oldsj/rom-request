@@ -37,6 +37,7 @@ func newRig(t *testing.T) *rig {
 		cfg.ProwlarrURL, cfg.ProwlarrAPIKey = r.prowlarr.URL, prowlarrKey
 		cfg.QBittorrentURL, cfg.QBittorrentUsername, cfg.QBittorrentPassword = r.qb.URL, "admin", "qb-pass"
 		cfg.QBittorrentSavePath, cfg.DownloadDir, cfg.LibraryDir = savePath, r.downloads, r.lib
+		cfg.ProwlarrBlockedIndexers = []string{"blueroms"}
 	})
 	return r
 }
